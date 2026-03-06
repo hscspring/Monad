@@ -6,13 +6,16 @@ Global settings for the Personal AGI Core.
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
+from dotenv import load_dotenv
+
+load_dotenv()
 
 
 @dataclass
 class LLMConfig:
     """LLM API configuration."""
-    base_url: str = "https://api.qnaigc.com/v1"
-    api_key: str = "sk-ef253f991b06149c04e15882cbb42da6f204a378534a36d51af726da5028f750"
+    base_url: str = os.getenv("MONAD_BASE_URL", "https://api.qnaigc.com/v1")
+    api_key: str = os.getenv("MONAD_API_KEY", "")
     model: str = "minimax/minimax-m2.5"
     temperature: float = 0.3
     max_tokens: int = 4096
