@@ -1,0 +1,9 @@
+goal: Fetch the latest news articles about a given topic using web scraping
+inputs:
+- topic
+name: fetch_topic_news
+steps:
+- Set up request headers with User-Agent to mimic browser
+- Search for news about the topic using Bing or Google News
+- Parse the search results to extract article titles, sources, and URLs
+- Return formatted news results

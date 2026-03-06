@@ -1,0 +1,75 @@
+"""
+MONAD Learning: Reflection
+Analyzes task execution results and saves experiences to knowledge vault.
+"""
+
+from core.llm import llm_call
+from knowledge.vault import KnowledgeVault
+from interface.output import Output
+
+
+REFLECTION_SYSTEM = """You are MONAD's Reflection module.
+After a task is completed, you analyze the execution and produce a concise experience summary in Chinese.
+
+You must return a structured summary with the following sections:
+1. 过程: Brief description of what was done
+2. 结果: Success or failure, and why
+3. 经验: What was learned that could be useful in the future
+4. 改进: How could this be done better next time
+
+Be concise and practical. Focus on actionable insights. Respond in Chinese."""
+
+
+class Reflection:
+    """Learns from task execution by analyzing results and saving experiences."""
+
+    def __init__(self, vault: KnowledgeVault = None):
+        self.vault = vault or KnowledgeVault()
+
+    def learn(self, objective: dict, execution_result: dict) -> str:
+        """Analyze execution results and save experience."""
+        prompt = self._build_prompt(objective, execution_result)
+
+        Output.system("正在调用 LLM 分析执行经验...")
+        try:
+            summary = llm_call(prompt, system=REFLECTION_SYSTEM, temperature=0.3)
+        except Exception as e:
+            Output.error(f"反思失败: {str(e)}")
+            summary = f"Reflection failed: {str(e)}"
+
+        Output.learning(f"反思总结:\n{summary[:300]}")
+
+        # Save to knowledge vault
+        task_desc = objective.get("goal", "Unknown task")
+        process = execution_result.get("summary", "")
+        result_status = "Success" if execution_result.get("success") else "Partial/Failed"
+
+        filepath = self.vault.save_experience(
+            task=task_desc,
+            process=process,
+            result=result_status,
+            notes=summary,
+        )
+
+        Output.learning(f"经验已保存: {filepath.name}")
+        return summary
+
+    def _build_prompt(self, objective: dict, execution_result: dict) -> str:
+        """Build reflection prompt."""
+        goal = objective.get("goal", "Unknown")
+        actions = objective.get("actions", [])
+        success = execution_result.get("success", False)
+        steps = execution_result.get("steps", [])
+
+        step_details = []
+        for s in steps:
+            status = "OK" if s.get("success") else "FAILED"
+            step_details.append(f"  Step {s.get('step')}: {s.get('description')} [{status}] → {s.get('result', '')[:200]}")
+
+        return (
+            f"Goal: {goal}\n"
+            f"Planned Actions: {', '.join(actions)}\n"
+            f"Overall Success: {success}\n\n"
+            f"Execution Details:\n" + "\n".join(step_details) + "\n\n"
+            f"Analyze this execution and provide your reflection."
+        )
