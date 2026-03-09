@@ -12,7 +12,7 @@ class Output:
 
     BANNER = r"""
     ╔══════════════════════════════════════╗
-    ║          M O N A D  v0.1             ║
+    ║          M O N A D  v0.1.0           ║
     ║    Personal AGI Operating Core       ║
     ╚══════════════════════════════════════╝
     """
