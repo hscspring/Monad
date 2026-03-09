@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.1] - 2026-03-09
+
+### Added
+- Feishu integration (`main_feishu.py`) supporting asynchronous background loop iteration.
+- Thread-local buffered output queues allowing step-by-step batched sending mechanics.
+- A concise 'records and accumulated_experiences' mechanism rather than full-length text context bloat.
+
 ## [0.1.0] - 2026-03-09
 
 ### Added
