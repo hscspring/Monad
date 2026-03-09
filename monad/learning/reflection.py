@@ -16,6 +16,7 @@ You must return a structured summary with the following sections:
 2. 结果: Success or failure, and why
 3. 经验: What was learned that could be useful in the future
 4. 改进: How could this be done better next time
+5. Tags: 3-5 keywords representing this task (e.g., #Python #Search)
 
 Be concise and practical. Focus on actionable insights. Respond in Chinese."""
 
@@ -44,14 +45,18 @@ class Reflection:
         process = execution_result.get("summary", "")
         result_status = "Success" if execution_result.get("success") else "Partial/Failed"
 
-        filepath = self.vault.save_experience(
+        # Save detailed log to records
+        filepath = self.vault.save_record(
             task=task_desc,
             process=process,
             result=result_status,
             notes=summary,
         )
+        Output.learning(f"执行记录已保存: {filepath.name}")
 
-        Output.learning(f"经验已保存: {filepath.name}")
+        # Save concise experience for future context
+        exp_path = self.vault.save_experience(task_desc, summary)
+        Output.learning(f"反思经验已沉淀: {exp_path.name}")
         return summary
 
     def _build_prompt(self, objective: dict, execution_result: dict) -> str:

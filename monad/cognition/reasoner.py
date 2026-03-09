@@ -300,6 +300,11 @@ class Reasoner:
         if knowledge.get("protocols"):
             sections.append(f"## Behavioral Protocols\n{knowledge['protocols']}")
 
+        # Experiences
+        if knowledge.get("experiences"):
+            sections.append(f"## Past Experiences\n{knowledge['experiences']}")
+            Output.system(f"已加载过往经验总结 ({len(knowledge['experiences'])} 字符)")
+
         sections.append(f"## User Request\n{user_input}")
 
         return "\n\n".join(sections)

@@ -90,6 +90,10 @@ class MonadConfig:
         return self.knowledge_path / "experiences"
 
     @property
+    def records_path(self) -> Path:
+        return self.knowledge_path / "records"
+
+    @property
     def cache_path(self) -> Path:
         return self.knowledge_path / "cache"
 

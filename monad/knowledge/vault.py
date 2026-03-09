@@ -28,6 +28,7 @@ class KnowledgeVault:
             self.config.protocols_path,
             self.config.user_path,
             self.config.experiences_path,
+            self.config.records_path,
             self.config.cache_path,
         ]
         for d in dirs:
@@ -94,6 +95,10 @@ class KnowledgeVault:
                     continue
         return "\n\n".join(skills)
 
+    def load_experiences(self) -> str:
+        """Load accumulated experiences."""
+        return self._load_dir(self.config.experiences_path)
+
     def load_all_context(self) -> dict:
         """Load all knowledge needed for Planner reasoning."""
         return {
@@ -103,21 +108,22 @@ class KnowledgeVault:
             "skills": self.load_skills(),
             "protocols": self.load_protocols(),
             "user_context": self.load_user_context(),
+            "experiences": self.load_experiences(),
         }
 
     # ── Write Operations ─────────────────────────────────────────
 
-    def save_experience(self, task: str, process: str, result: str, notes: str = "") -> Path:
-        """Save a task execution experience."""
+    def save_record(self, task: str, process: str, result: str, notes: str = "") -> Path:
+        """Save a task execution experience log/record."""
         timestamp = datetime.now().strftime("%Y_%m_%d_%H%M%S")
         # Sanitize task name for filename
         safe_name = "".join(c if c.isalnum() or c in "-_ " else "" for c in task)
         safe_name = safe_name.strip().replace(" ", "_")[:50]
         filename = f"{timestamp}_{safe_name}.md"
-        filepath = self.config.experiences_path / filename
+        filepath = self.config.records_path / filename
 
         content = (
-            f"# Task Experience\n\n"
+            f"# Task Record\n\n"
             f"**Date**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
             f"## Task\n{task}\n\n"
             f"## Process\n{process}\n\n"
@@ -127,6 +133,14 @@ class KnowledgeVault:
             content += f"## Notes\n{notes}\n"
 
         filepath.write_text(content, encoding="utf-8")
+        return filepath
+
+    def save_experience(self, query: str, reflection: str) -> Path:
+        """Save a concise experience (Query + Reflection) for future context."""
+        filepath = self.config.experiences_path / "accumulated_experiences.md"
+        content = f"### 历史任务: {query}\n{reflection}\n\n---\n\n"
+        with open(filepath, "a", encoding="utf-8") as f:
+            f.write(content)
         return filepath
 
     def save_skill(self, name: str, goal: str, inputs: list, steps: list, code: str = "") -> Path:
