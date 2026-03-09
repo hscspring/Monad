@@ -83,35 +83,35 @@ When you give MONAD an objective (e.g., *"What is the weather in Hangzhou today?
 
 ## 🚀 Installation
 
-**1. Clone the repository**
+**1. Install via pip (Recommended)**
+```bash
+pip install monad-core
+```
+
+*Alternatively, install from source:*
 ```bash
 git clone https://github.com/hscspring/Monad.git
 cd Monad
+pip install -e .
 ```
 
-**2. Install dependencies**
-```bash
-## Using a virtual environment is highly recommended
-pip install -r requirements.txt
-```
-
-**3. Configure your LLM**
-Update `config.py` with your LLM Base URL, API Key, and Model name (Defaults to an OpenAI-compatible API).
+**2. Configure your LLM**
+On your first run, MONAD will initialize its workspace in `~/.monad/`. Update `~/.monad/.env` with your LLM Base URL, API Key, and Model name.
 
 ---
 
 ## 💻 Usage
 
 ### Interactive Terminal Mode
-Start the continuous ReAct agent loop:
+Start the continuous ReAct agent loop from anywhere:
 ```bash
-python main.py
+monad
 ```
 
 ### Self-Test
 Verify all modules load correctly and the LLM connection is functioning:
 ```bash
-python main.py --test
+monad --test
 ```
 
 ### Unit Tests

@@ -6,10 +6,10 @@ Executes basic capabilities (python_exec, shell, web_fetch, ask_user) and learne
 import importlib
 from pathlib import Path
 
-from tools.python_exec import run as python_exec_run
-from tools.shell import run as shell_run
-from tools.web_fetch import run as web_fetch_run
-from tools.ask_user import run as ask_user_run
+from monad.tools.python_exec import run as python_exec_run
+from monad.tools.shell import run as shell_run
+from monad.tools.web_fetch import run as web_fetch_run
+from monad.tools.ask_user import run as ask_user_run
 
 
 class Executor:

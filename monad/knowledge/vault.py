@@ -8,7 +8,7 @@ import os
 import yaml
 from datetime import datetime
 from pathlib import Path
-from config import CONFIG
+from monad.config import CONFIG
 
 
 class KnowledgeVault:

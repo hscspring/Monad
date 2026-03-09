@@ -1,5 +1,5 @@
 import unittest
-from tools.web_fetch import run
+from monad.tools.web_fetch import run
 
 
 class TestWebFetchExplicitModes(unittest.TestCase):

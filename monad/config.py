@@ -4,11 +4,32 @@ Global settings for the Personal AGI Core.
 """
 
 import os
+import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv()
+PACKAGE_DIR = Path(__file__).parent
+WORKSPACE_DIR = Path.home() / ".monad"
+
+# Initialize workspace on first run
+if not WORKSPACE_DIR.exists():
+    WORKSPACE_DIR.mkdir(parents=True)
+    # Copy bundled knowledge
+    bundled_knowledge = PACKAGE_DIR / "knowledge"
+    if bundled_knowledge.exists():
+        shutil.copytree(bundled_knowledge, WORKSPACE_DIR / "knowledge", dirs_exist_ok=True)
+    
+    # Create default .env
+    env_file = WORKSPACE_DIR / ".env"
+    env_content = (
+        "# MONAD Configuration\n"
+        "MONAD_BASE_URL=https://api.qnaigc.com/v1\n"
+        "MONAD_API_KEY=\n"
+    )
+    env_file.write_text(env_content, encoding="utf-8")
+
+load_dotenv(WORKSPACE_DIR / ".env")
 
 
 @dataclass
@@ -24,8 +45,8 @@ class LLMConfig:
 @dataclass
 class MonadConfig:
     """Top-level MONAD configuration."""
-    # Root directory of the MONAD project
-    root_dir: Path = field(default_factory=lambda: Path(__file__).parent)
+    # Root directory of the MONAD workspace
+    root_dir: Path = field(default_factory=lambda: WORKSPACE_DIR)
 
     # LLM settings
     llm: LLMConfig = field(default_factory=LLMConfig)

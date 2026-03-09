@@ -6,8 +6,8 @@ Includes timeout handling to prevent hanging.
 
 import httpx
 from openai import OpenAI
-from config import CONFIG
-from interface.output import Output
+from monad.config import CONFIG
+from monad.interface.output import Output
 
 
 _client = None

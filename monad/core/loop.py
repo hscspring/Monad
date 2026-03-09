@@ -8,13 +8,13 @@ MONAD thinks like a rational person:
 All process steps are printed for user visibility.
 """
 
-from cognition.reasoner import Reasoner
-from execution.executor import Executor
-from knowledge.vault import KnowledgeVault
-from learning.reflection import Reflection
-from learning.skill_builder import SkillBuilder
-from interface.output import Output
-from interface.voice_input import VoiceInput
+from monad.cognition.reasoner import Reasoner
+from monad.execution.executor import Executor
+from monad.knowledge.vault import KnowledgeVault
+from monad.learning.reflection import Reflection
+from monad.learning.skill_builder import SkillBuilder
+from monad.interface.output import Output
+from monad.interface.voice_input import VoiceInput
 
 
 class MonadLoop:

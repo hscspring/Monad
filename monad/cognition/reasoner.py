@@ -9,9 +9,9 @@ This is the brain of MONAD. Every step is printed so the user can see the proces
 """
 
 import json
-from core.llm import llm_call
-from knowledge.vault import KnowledgeVault
-from interface.output import Output
+from monad.core.llm import llm_call
+from monad.knowledge.vault import KnowledgeVault
+from monad.interface.output import Output
 
 
 REASONER_SYSTEM = """You are MONAD, a rational autonomous agent.

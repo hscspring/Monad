@@ -17,7 +17,7 @@ import os
 # Ensure project root is in path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from interface.output import Output
+from monad.interface.output import Output
 
 
 def run_self_test():

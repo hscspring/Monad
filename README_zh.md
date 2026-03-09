@@ -74,21 +74,32 @@ MONAD/
 
 ## Setup
 
+**1. 通过 pip 安装（推荐）**
 ```bash
-pip install -r requirements.txt
+pip install monad-core
 ```
 
-在 `config.py` 中配置 LLM 的 Base URL、API Key 和模型名称。
+*或者从源码自建：*
+```bash
+git clone https://github.com/hscspring/Monad.git
+cd Monad
+pip install -e .
+```
+
+**2. 配置模型**
+首次运行时，MONAD 会自动在 `~/.monad/` 生成工作区。请修改 `~/.monad/.env` 中的 LLM Base URL、API Key 和模型名称。
 
 ## Usage
 
+可以在任意目录唤起 MONAD：
+
 ```bash
 # 交互模式
-python main.py
+monad
 
-# 自检
-python main.py --test
-
+# 启动自检
+monad --test
+```
 # 运行单元测试
 python -m pytest tests/ -v
 ```
