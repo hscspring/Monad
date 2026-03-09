@@ -30,20 +30,22 @@ Instead, it **autonomously learns** how to complete your tasks by writing and ex
 
 *   **File System as Database:** The system itself has no memory of past sessions. It persists all learned information (axioms, environment knowledge, learned skills, user context, and experiences) directly to local Markdown files. No vector databases, no RAG, zero external dependencies.
 *   **Absolute Rationality:** MONAD follows a strict reasoning loop (`Analyze → Self-check → Learn → Execute → Reflect`) to accomplish goals logically.
-*   **Self-Learning & Self-Evolving:** Instead of shipping with 100 tools, MONAD ships with only 3 basic instincts. It learns everything else by generating code.
-*   **LLM as a Command Executor:** The LLM's own training data is disregarded. All factual information must be retrieved from the real world via code execution (e.g., scraping websites, calling APIs).
+*   **Self-Learning & Self-Evolving:** Instead of shipping with 100 tools, MONAD ships with only 4 basic instincts (hands 🤲, voice 🗣️, eyes 👁️, dialogue 💬). It learns everything else by generating code.
+*   **LLM as a Command Executor:** The LLM's own training data is disregarded. All factual information must be retrieved from the real world via code execution or web perception.
+*   **Search First, Ask Later:** When stuck during execution (errors, missing packages, unfamiliar tools), MONAD's first instinct is to search the web via `web_fetch`, never to guess. But if the user's intent is unclear, MONAD asks the user first. In short: **unclear query → ask user; execution problem → search first**.
 
 ---
 
 ## ⚡ Basic Capabilities ("Instincts")
 
-MONAD comes with only three built-in capabilities:
+MONAD comes with only four built-in capabilities:
 
-| Capability | Description |
-| :--- | :--- |
-| 🐍 `python_exec` | Evaluate arbitrary Python code. The ultimate fallback: call APIs, crawl the web, process data, install missing libraries—learn to do anything a human programmer can do. |
-| 💻 `shell` | Execute shell commands on the host operating system. |
-| 🙋 `ask_user` | Ask the user for clarification when it truly cannot proceed independently. |
+| Capability | Metaphor | Description |
+| :--- | :--- | :--- |
+| 🐍 `python_exec` | Hands 🤲 | Evaluate arbitrary Python code. Process data, call APIs, read/write files, install libraries—learn to do anything. |
+| 💻 `shell` | Voice 🗣️ | Execute shell commands on the host operating system. |
+| 👁️ `web_fetch` | Eyes 👁️ | Perceive the internet directly. Fetch web pages with 3 modes: fast (HTTP), stealth (anti-bot), browser (JS render). Powered by Scrapling. |
+| 🙋 `ask_user` | Dialogue 💬 | Ask the user for clarification when it truly cannot proceed independently. |
 
 ---
 
@@ -62,7 +64,7 @@ knowledge/
 ├── skills/          # Auto-generated reusable Python skills
 ├── experiences/     # Execution logs and post-task reflections
 ├── protocols/       # Error handling protocols
-└── tools/           # Documentation for the 3 basic capabilities
+└── tools/           # Documentation for the 4 basic capabilities
 ```
 
 ---
@@ -110,6 +112,12 @@ python main.py
 Verify all modules load correctly and the LLM connection is functioning:
 ```bash
 python main.py --test
+```
+
+### Unit Tests
+Run the test suite for all tools:
+```bash
+python -m pytest tests/ -v
 ```
 
 ---

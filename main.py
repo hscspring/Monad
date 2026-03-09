@@ -55,6 +55,7 @@ def run_self_test():
         caps = executor.capability_names
         assert "python_exec" in caps, "python_exec not found"
         assert "shell" in caps, "shell not found"
+        assert "web_fetch" in caps, "web_fetch not found"
         assert "ask_user" in caps, "ask_user not found"
         Output.system(f"✅ Basic capabilities: {', '.join(caps)}")
     except Exception as e:
@@ -102,7 +103,7 @@ def run_self_test():
     else:
         Output.status("Self-test passed. All modules operational. ✅")
         Output.status("MONAD is a self-learning agent. No pre-built tools.")
-        Output.status("Capabilities: python_exec → shell → ask_user")
+        Output.status("Capabilities: python_exec → shell → web_fetch → ask_user")
         Output.status("Everything else, MONAD learns by itself.")
         return True
 

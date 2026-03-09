@@ -5,40 +5,60 @@ Internet access is required for:
 - API calls (weather, data services, etc.)
 - Online data retrieval
 
-## 搜索引擎（最重要的信息获取方式）
+## 工具选择决策树
 
-需要搜索任何信息时，优先使用搜索引擎，不要猜测具体网站：
+```
+需要互联网信息？
+├── 需要网页内容 → web_fetch（首选！）
+│   ├── 普通网页 → mode="fast"（默认）
+│   ├── 反爬/Cloudflare → mode="stealth"
+│   └── JS 渲染/SPA → mode="browser"
+├── 需要调用 API → python_exec（写代码调用）
+└── 需要安装库 → shell（pip install）
+```
 
-### Bing 搜索（推荐，无需 API key）
+## web_fetch — 互联网感知（推荐）
+
+直接获取网页内容，无需写代码：
+
+### 搜索引擎（最重要的信息获取方式）
+
+Bing 搜索（推荐，无需 API key）：
+```json
+{"capability": "web_fetch", "params": {"url": "https://www.bing.com/search?q=搜索关键词"}}
+```
+
+百度搜索（中文信息推荐）：
+```json
+{"capability": "web_fetch", "params": {"url": "https://www.baidu.com/s?wd=搜索关键词"}}
+```
+
+### 精确提取内容
+```json
+{"capability": "web_fetch", "params": {"url": "https://example.com", "selector": ".article-content"}}
+```
+
+### 反爬绕过
+```json
+{"capability": "web_fetch", "params": {"url": "https://protected.com", "mode": "stealth"}}
+```
+
+### 动态页面
+```json
+{"capability": "web_fetch", "params": {"url": "https://spa.com", "mode": "browser"}}
+```
+
+## python_exec — 复杂数据获取与处理
+
+当需要调用 API 或对数据做复杂处理时，用 python_exec：
+
+### 天气 API
 ```python
 import requests
-from bs4 import BeautifulSoup
-
-url = "https://www.bing.com/search"
-params = {"q": "你的搜索关键词"}
-headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
-resp = requests.get(url, params=params, headers=headers, timeout=10)
-resp.encoding = resp.apparent_encoding
-soup = BeautifulSoup(resp.text, 'html.parser')
-for item in soup.select('li.b_algo h2 a'):
-    print(item.get_text(strip=True))
-```
-
-### 百度搜索（中文信息推荐）
-```python
-url = "https://www.baidu.com/s"
-params = {"wd": "你的搜索关键词"}
-headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
-resp = requests.get(url, params=params, headers=headers, timeout=10)
-resp.encoding = resp.apparent_encoding
-```
-
-## 中文网页抓取注意事项
-
-抓取中文网站时必须处理编码：
-```python
-resp = requests.get(url, headers=headers, timeout=10)
-resp.encoding = resp.apparent_encoding  # 自动检测编码
+url = "https://api.open-meteo.com/v1/forecast"
+params = {"latitude": 30.25, "longitude": 120.17, "current_weather": True}
+resp = requests.get(url, params=params, timeout=10)
+print(resp.json())
 ```
 
 ## 常用 API

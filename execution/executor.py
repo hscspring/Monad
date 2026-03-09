@@ -1,6 +1,6 @@
 """
 MONAD Execution: Executor
-Executes basic capabilities (python_exec, shell, ask_user) and learned skills.
+Executes basic capabilities (python_exec, shell, web_fetch, ask_user) and learned skills.
 """
 
 import importlib
@@ -8,6 +8,7 @@ from pathlib import Path
 
 from tools.python_exec import run as python_exec_run
 from tools.shell import run as shell_run
+from tools.web_fetch import run as web_fetch_run
 from tools.ask_user import run as ask_user_run
 
 
@@ -15,10 +16,11 @@ class Executor:
     """Executes MONAD's basic capabilities and learned skills."""
 
     def __init__(self):
-        # Basic capabilities — MONAD's "instincts"
+        # Basic capabilities — MONAD's 4 "instincts"
         self._capabilities = {
             "python_exec": python_exec_run,
             "shell": shell_run,
+            "web_fetch": web_fetch_run,
             "ask_user": ask_user_run,
         }
 
