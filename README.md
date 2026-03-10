@@ -73,11 +73,11 @@ knowledge/
 
 When you give MONAD an objective (e.g., *"What is the weather in Hangzhou today?"*):
 
-1.  **Analyze & Self-Check:** The Reasoner loads the knowledge base and checks if a `get_weather` skill already exists.
-2.  **Plan & Act:** If no skill exists, it writes a Python script using `python_exec` to call a free weather API (e.g., Open-Meteo).
-3.  **Observe & Adjust:** It runs the code, observes the standard output. If it crashes, it analyzes the error, patches the code, and retries.
-4.  **Answer:** It formats the final retrieved real-world data for the user.
-5.  **Reflect & Learn:** After the task, the `Reflection` module analyzes what happened. The `SkillBuilder` then evaluates if the logic should be extracted into a new permanent skill file.
+1.  **Analyze & Self-Check:** Understand intent and check the local knowledge base for existing skills.
+2.  **Learn & Research (The "Search First" Principle):** If the task is unknown or an error occurs, MONAD uses `web_fetch` to research documentation, API usage, or solutions. This is the "Learning" phase where it acquires the "how-to" knowledge before acting.
+3.  **Execute & Observe:** MONAD writes and executes Python code or shell commands via `python_exec`. It treats the output as "Observations" to verify success or identify new obstacles.
+4.  **Reflect & Persist:** After a successful execution, the `Reflection` module summarizes the experience. The `SkillBuilder` then evaluates if the logic should be abstracted into a permanent, reusable `skill`.
+5.  **Answer:** Provide the final answer based on real-world data verified through execution.
 
 ---
 
