@@ -32,6 +32,7 @@ Instead, it **autonomously learns** how to complete your tasks by writing and ex
 *   **Absolute Rationality:** MONAD follows a strict reasoning loop (`Analyze → Self-check → Learn → Execute → Reflect`) to accomplish goals logically.
 *   **Self-Learning & Self-Evolving:** Instead of shipping with 100 tools, MONAD ships with only 4 basic instincts (hands 🤲, voice 🗣️, eyes 👁️, dialogue 💬). It learns everything else by generating code.
 *   **LLM as a Command Executor:** The LLM's own training data is disregarded. All factual information must be retrieved from the real world via code execution or web perception.
+*   **Stateless Message Management:** Every user request starts with a fresh, clean message context. MONAD doesn't rely on LLM Chat History; instead, it persists vital information via reflection loops. This ensures reasoning purity and prevents hallucination buildup from long conversations.
 *   **Search First, Ask Later:** When stuck during execution (errors, missing packages, unfamiliar tools), MONAD's first instinct is to search the web via `web_fetch`, never to guess. But if the user's intent is unclear, MONAD asks the user first. In short: **unclear query → ask user; execution problem → search first**.
 
 ---
@@ -78,6 +79,15 @@ When you give MONAD an objective (e.g., *"What is the weather in Hangzhou today?
 3.  **Execute & Observe:** MONAD writes and executes Python code or shell commands via `python_exec`. It treats the output as "Observations" to verify success or identify new obstacles.
 4.  **Reflect & Persist:** After a successful execution, the `Reflection` module summarizes the experience. The `SkillBuilder` then evaluates if the logic should be abstracted into a permanent, reusable `skill`.
 5.  **Answer:** Provide the final answer based on real-world data verified through execution.
+
+### 💡 Deep Dive: Why Stateless?
+
+MONAD intentionally discards traditional "Chat History" in favor of a **Stateless Design**, where every task starts with a clean context and persists only vital information via the file system.
+
+*   **Mitigating Hallucination:** Long-running chat histories eventually lead to context pollution and attention decay. By resetting the context per task, we force the LLM to reason in a pure, noise-free environment.
+*   **Physical Memory:** Unlike black-box model caches, MONAD's memory consists of human-readable Markdown files. This is a deliberate step towards **Personal Data Sovereignty**.
+*   **Task Atomicity:** Every objective becomes an independent, reproducible unit of execution.
+*   **The Future of Agents:** We believe the evolution of Agents will shift from "simulating conversation" to "simulating rational execution." Maintaining a living **"State Whiteboard"** via reflection loops is far more aligned with the essence of AGI than endlessly stacking chat logs.
 
 ---
 
