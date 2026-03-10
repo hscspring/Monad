@@ -116,13 +116,12 @@ monad --cli
 ```bash
 APP_ID=xxx APP_SECRET=yyy monad --feishu
 ```
+> **提示**: 飞书模式需要额外安装依赖：`pip install monad-core[feishu]`
 
 ### 系统自检
 ```bash
 monad --test
 ```
-
-> **提示**: 飞书模式需要额外安装依赖：`pip install monad-core[feishu]`
 
 ### 运行单元测试
 ```bash
