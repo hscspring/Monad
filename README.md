@@ -1,5 +1,5 @@
 <div align="center">
-  <h1>🌌 MONAD (v0.1)</h1>
+  <h1>🌌 MONAD</h1>
   <p><strong>Personal AGI Operating Core</strong></p>
 
   <p>

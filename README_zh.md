@@ -1,4 +1,4 @@
-# MONAD (v0.1) — Personal AGI Operating Core
+# MONAD — Personal AGI Operating Core
 
 > 不是聊天机器人，不是工具匹配器，而是一个**目标驱动的自主学习理性执行内核**。
 
