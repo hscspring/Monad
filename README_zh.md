@@ -99,17 +99,25 @@ playwright install chromium
 
 安装完成后，可以在**终端的任意路径**下直接唤起 MONAD。
 
+### 启动 Web 交互界面 (默认)
 ```bash
-# 启动 Web 交互界面 (默认)
 monad
+```
 
-# 启动纯命令行交互模式 (经典模式)
+### 启动纯命令行交互模式 (经典模式)
+```bash
 monad --cli
+```
 
-# 启动飞书机器人模式
+### 飞书机器人模式
+1. 按照 [飞书机器人配置指南](https://open.feishu.cn/document/develop-an-echo-bot/introduction) 配置好前两步，拿到 `APP_ID` 和 `APP_SECRET`。
+2. 启动飞书机器人模式：
+```bash
 APP_ID=xxx APP_SECRET=yyy monad --feishu
+```
 
-# 启动系统自检
+### 系统自检
+```bash
 monad --test
 ```
 

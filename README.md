@@ -123,7 +123,8 @@ monad --cli
 ```
 
 ### Feishu (Lark) Bot Mode
-Connect MONAD to a Feishu bot via WebSocket:
+1. Follow the first two steps in the [Feishu Bot Guide](https://open.feishu.cn/document/develop-an-echo-bot/introduction) to create a bot and obtain your `APP_ID` and `APP_SECRET`.
+2. Connect MONAD to your Feishu bot via WebSocket:
 ```bash
 APP_ID=xxx APP_SECRET=yyy monad --feishu
 ```
