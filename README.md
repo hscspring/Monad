@@ -102,7 +102,8 @@ playwright install chromium
 ```
 
 **3. Configure your LLM**
-On your first run, MONAD will initialize its workspace in `~/.monad/`. Update `~/.monad/.env` with your LLM Base URL, API Key, and Model name.
+On your first run, MONAD will initialize its workspace in `~/.monad/`. Update `~/.monad/.env` with your LLM Base URL, API Key, and Model name. 
+> **Note**: If you don't configure this manually, MONAD will guide you through an interactive setup with connectivity validation on your first launch.
 
 ---
 
