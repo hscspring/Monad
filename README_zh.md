@@ -86,20 +86,36 @@ cd Monad
 pip install -e .
 ```
 
-**2. 配置模型**
+**2. 安装浏览器内核（必须）**
+MONAD 的 `web_fetch` 能力依赖 Chromium 来抓取动态网页：
+```bash
+playwright install chromium
+```
+
+**3. 配置模型**
 首次运行时，MONAD 会自动在 `~/.monad/` 生成工作区。请修改 `~/.monad/.env` 中的 LLM Base URL、API Key 和模型名称。
 
 ## Usage
 
-可以在任意目录唤起 MONAD：
+安装完成后，可以在**终端的任意路径**下直接唤起 MONAD。
 
 ```bash
-# 交互模式
+# 启动 Web 交互界面 (默认)
 monad
 
-# 启动自检
+# 启动纯命令行交互模式 (经典模式)
+monad --cli
+
+# 启动飞书机器人模式
+APP_ID=xxx APP_SECRET=yyy monad --feishu
+
+# 启动系统自检
 monad --test
 ```
-# 运行单元测试
+
+> **提示**: 飞书模式需要额外安装依赖：`pip install monad-core[feishu]`
+
+### 运行单元测试
+```bash
 python -m pytest tests/ -v
 ```

@@ -129,8 +129,7 @@ REASONER_SYSTEM = """You are MONAD, a rational autonomous agent.
 8. 始终用中文回答。
 9. 先 thought 思考，再 action 行动。
 10. Python 代码中必须包含 print() 语句。
-11. 每次回复只输出一个 JSON。不要输出多个。不要加任何前缀文字。"""
-
+11. [CRITICAL] 每次回复只能输出一个纯 JSON 对象，不能输出多个。绝对禁止输出任何 XML/HTML 标签（如 `<think>`, `<minimax:tool_call>`, `<invoke>`）。你的输出将被直接用 `json.loads` 解析，如果有任何多余字符将导致系统崩溃！"""
 
 MAX_TURNS = 15
 
@@ -321,6 +320,32 @@ class Reasoner:
 
         return "\n".join(parts)
 
+    def _normalize_parsed(self, parsed: dict) -> dict | None:
+        """Normalize alternative JSON formats into the standard format."""
+        if "type" in parsed:
+            return parsed
+        # Handle {"action": "ask_user", "params": {...}} format
+        if "action" in parsed:
+            return {
+                "type": "action",
+                "capability": parsed["action"],
+                "params": parsed.get("params", {}),
+            }
+        # Handle {"capability": "shell", "params": {...}} format
+        if "capability" in parsed:
+            return {
+                "type": "action",
+                "capability": parsed["capability"],
+                "params": parsed.get("params", {}),
+            }
+        # Handle {"answer": "..."} format
+        if "answer" in parsed:
+            return {"type": "answer", "content": parsed["answer"]}
+        # Handle {"thought": "..."} format
+        if "thought" in parsed:
+            return {"type": "thought", "content": parsed["thought"]}
+        return None
+
     def _parse_response(self, raw: str) -> dict:
         """Parse LLM response into structured format.
 
@@ -330,8 +355,18 @@ class Reasoner:
         - JSON mixed with text labels (e.g. '思考: {...}')
         - Multiple JSON objects (takes the first valid one)
         - Truncated JSON (attempts to fix)
+        - <think>...</think> XML blocks (stripped)
+        - Alternative format: {"action": ..., "params": ...}
         """
         cleaned = raw.strip()
+
+        # Strip <think>...</think> blocks (Minimax model leakage)
+        import re
+        cleaned = re.sub(r'<think>.*?</think>', '', cleaned, flags=re.DOTALL).strip()
+        # Also strip unclosed <think> blocks (truncated responses)
+        cleaned = re.sub(r'<think>.*$', '', cleaned, flags=re.DOTALL).strip()
+        # Strip any remaining XML-like tags from Minimax
+        cleaned = re.sub(r'</?(?:minimax:tool_call|invoke|parameter)[^>]*>', '', cleaned).strip()
 
         # Remove markdown code blocks
         if "```" in cleaned:
@@ -342,8 +377,9 @@ class Reasoner:
         # Strategy 1: Direct parse
         try:
             parsed = json.loads(cleaned)
-            if "type" in parsed:
-                return parsed
+            normalized = self._normalize_parsed(parsed)
+            if normalized:
+                return normalized
         except json.JSONDecodeError:
             pass
 
@@ -362,8 +398,9 @@ class Reasoner:
                     candidate = cleaned[json_start:i + 1]
                     try:
                         parsed = json.loads(candidate)
-                        if "type" in parsed:
-                            return parsed
+                        normalized = self._normalize_parsed(parsed)
+                        if normalized:
+                            return normalized
                     except json.JSONDecodeError:
                         pass
                     json_start = -1

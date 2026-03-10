@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.0] - 2026-03-10
+
+### Added
+- **Web UI**: A modern, two-column browser-based interface (`FastAPI` + `WebSockets`) replaces the default CLI loop. Left column: chat + output files. Right column: real-time log stream.
+- **Interactive First-Run Setup**: On first boot, MONAD guides users to configure `Base URL`, `API Key`, and `Model ID` with real-time API connectivity validation before saving to `~/.monad/.env`.
+- **Feishu Bot Integration**: `monad --feishu` connects MONAD to a Feishu (Lark) bot via WebSocket long-connection. Usage: `APP_ID=xxx APP_SECRET=yyy monad --feishu`. Requires `pip install monad-core[feishu]`.
+
+### Fixed
+- **LLM Parser Hardening**: Added regex-based `<think>` block stripping and `_normalize_parsed()` to handle alternative JSON formats from Minimax models (e.g. `{"action": ...}` instead of `{"type": "action", ...}`).
+- **ask_user Chat Display**: Questions from `ask_user` now appear in the frontend chat panel via `[__WS_ASK_USER__]` markers.
+- **WebSocket Result Parsing**: Fixed boundary parsing for LLM answers not displaying in the chat dialog.
+- **Static Files Packaging**: Ensured `index.html` and `knowledge/*` files are bundled into the PyPI wheel.
+- **Dependency Fix**: Pinned `curl_cffi < 0.14.0` to avoid a broken wheel build on macOS arm64.
+
 ## [0.1.1] - 2026-03-09
 
 ### Added

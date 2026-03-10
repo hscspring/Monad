@@ -85,6 +85,7 @@ class Output:
     @staticmethod
     def result(msg: str):
         """Print a final result message."""
+        Output._emit("[__WS_RESULT_START__]")
         lines = [
             f"\n[MONAD] 📦 结果:",
             f"{'═' * 40}",
@@ -92,6 +93,7 @@ class Output:
             f"{'═' * 40}\n"
         ]
         Output._emit("\n".join(lines))
+        Output._emit("[__WS_RESULT_END__]")
 
     @staticmethod
     def error(msg: str):

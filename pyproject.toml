@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "monad-core"
-version = "0.1.1"
+version = "0.2.0"
 description = "Personal AGI Operating Core"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -22,9 +22,12 @@ dependencies = [
     "loguru>=0.7.0",
     "scrapling>=0.1.0",
     "playwright>=1.40.0",
-    "curl_cffi>=0.7.0",
+    "curl_cffi>=0.7.0,<0.14.0",
     "python-dotenv>=1.0.0",
-    "pyyaml>=6.0"
+    "pyyaml>=6.0",
+    "fastapi>=0.100.0",
+    "uvicorn>=0.23.0",
+    "websockets>=11.0.3"
 ]
 
 [project.optional-dependencies]
@@ -32,9 +35,16 @@ dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0"
 ]
+feishu = [
+    "lark-oapi>=1.0.0"
+]
 
 [project.scripts]
 monad = "monad.main:main"
 
 [tool.setuptools]
 packages = ["monad", "monad.cognition", "monad.core", "monad.execution", "monad.interface", "monad.knowledge", "monad.learning", "monad.tools"]
+
+[tool.setuptools.package-data]
+"monad.interface" = ["static/*"]
+"monad" = ["knowledge/**/*", "knowledge/*"]

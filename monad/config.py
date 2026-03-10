@@ -15,17 +15,22 @@ WORKSPACE_DIR = Path.home() / ".monad"
 # Initialize workspace on first run
 if not WORKSPACE_DIR.exists():
     WORKSPACE_DIR.mkdir(parents=True)
-    # Copy bundled knowledge
+
+# Copy bundled knowledge if missing
+knowledge_dir = WORKSPACE_DIR / "knowledge"
+if not knowledge_dir.exists():
     bundled_knowledge = PACKAGE_DIR / "knowledge"
     if bundled_knowledge.exists():
-        shutil.copytree(bundled_knowledge, WORKSPACE_DIR / "knowledge", dirs_exist_ok=True)
-    
-    # Create default .env
-    env_file = WORKSPACE_DIR / ".env"
+        shutil.copytree(bundled_knowledge, knowledge_dir, dirs_exist_ok=True)
+
+# Create default .env if missing
+env_file = WORKSPACE_DIR / ".env"
+if not env_file.exists():
     env_content = (
         "# MONAD Configuration\n"
         "MONAD_BASE_URL=https://api.qnaigc.com/v1\n"
         "MONAD_API_KEY=\n"
+        "MODEL_ID=minimax/minimax-m2.5\n"
     )
     env_file.write_text(env_content, encoding="utf-8")
 
@@ -37,7 +42,7 @@ class LLMConfig:
     """LLM API configuration."""
     base_url: str = os.getenv("MONAD_BASE_URL", "https://api.qnaigc.com/v1")
     api_key: str = os.getenv("MONAD_API_KEY", "")
-    model: str = "minimax/minimax-m2.5"
+    model: str = os.getenv("MODEL_ID", "minimax/minimax-m2.5")
     temperature: float = 0.3
     max_tokens: int = 4096
 

@@ -95,18 +95,39 @@ cd Monad
 pip install -e .
 ```
 
-**2. Configure your LLM**
+**2. Install Browser Engine (Required)**
+MONAD's `web_fetch` capability requires the Chromium browser engine to parse dynamic web pages:
+```bash
+playwright install chromium
+```
+
+**3. Configure your LLM**
 On your first run, MONAD will initialize its workspace in `~/.monad/`. Update `~/.monad/.env` with your LLM Base URL, API Key, and Model name.
 
 ---
 
 ## 💻 Usage
 
-### Interactive Terminal Mode
-Start the continuous ReAct agent loop from anywhere:
+Once installed, you can start the MONAD agent from **any directory** in your terminal.
+
+### Start Web UI (Default)
+Launch the modern browser-based interface:
 ```bash
 monad
 ```
+
+### Interactive Terminal Mode (Classic)
+Start the continuous ReAct agent loop in the CLI:
+```bash
+monad --cli
+```
+
+### Feishu (Lark) Bot Mode
+Connect MONAD to a Feishu bot via WebSocket:
+```bash
+APP_ID=xxx APP_SECRET=yyy monad --feishu
+```
+> **Note**: Requires `pip install monad-core[feishu]` for the `lark-oapi` dependency.
 
 ### Self-Test
 Verify all modules load correctly and the LLM connection is functioning:

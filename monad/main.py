@@ -108,15 +108,89 @@ def run_self_test():
         return True
 
 
+def check_first_run_setup():
+    """Check if the API key is missing and prompt the user for it."""
+    from monad.config import CONFIG, WORKSPACE_DIR
+    if not CONFIG.llm.api_key:
+        print("\n" + "=" * 50)
+        print(" Welcome to MONAD — First Run Setup")
+        print("=" * 50)
+        print("Please configure your LLM provider settings.")
+        print("Press Enter to accept the default values shown in brackets.")
+        print(f"Your configuration will be saved to: {WORKSPACE_DIR / '.env'}\n")
+        
+        while True:
+            base_url = input(f"API Base URL [{CONFIG.llm.base_url}]: ").strip()
+            api_key = input("API Key (Required for usage): ").strip()
+            model_id = input(f"Model ID [{CONFIG.llm.model}]: ").strip()
+            
+            if not api_key:
+                print("\n[!] Skipped config setup. MONAD may not function correctly without an API Key.")
+                break
+            
+            # Use defaults if left blank
+            final_base_url = base_url if base_url else CONFIG.llm.base_url
+            final_model_id = model_id if model_id else CONFIG.llm.model
+            
+            print("\n[.] 正在验证 API 配置 (Testing API connection)...")
+            try:
+                from openai import OpenAI
+                import httpx
+                test_client = OpenAI(
+                    base_url=final_base_url,
+                    api_key=api_key,
+                    timeout=httpx.Timeout(10.0)
+                )
+                test_client.chat.completions.create(
+                    model=final_model_id,
+                    messages=[{"role": "user", "content": "Hi"}],
+                    max_tokens=1
+                )
+                print("[✔] 验证成功！(Verification passed!)")
+                
+                env_path = WORKSPACE_DIR / ".env"
+                content = (
+                    "# MONAD Configuration\n"
+                    f"MONAD_BASE_URL={final_base_url}\n"
+                    f"MONAD_API_KEY={api_key}\n"
+                    f"MODEL_ID={final_model_id}\n"
+                )
+                
+                env_path.write_text(content, encoding="utf-8")
+                
+                # Update runtime config
+                CONFIG.llm.base_url = final_base_url
+                CONFIG.llm.api_key = api_key
+                CONFIG.llm.model = final_model_id
+                
+                print("\n[✔] Configuration successfully saved!")
+                break
+            except Exception as e:
+                print(f"[!] 验证失败 (Connection failed): {e}")
+                print("请检查填写的链接、凭证和模型ID是否正确，然后再试一次。(Please try again)\n")
+                
+        print("=" * 50 + "\n")
+
+
 def main():
     """Main entry point."""
     if "--test" in sys.argv:
         success = run_self_test()
         sys.exit(0 if success else 1)
+        
+    # Prompt for setup if needed before launching
+    check_first_run_setup()
+    
+    if "--cli" in sys.argv:
+        from monad.core.loop import MonadLoop
+        agent = MonadLoop()
+        agent.start()
+    elif "--feishu" in sys.argv:
+        from monad.interface.feishu import start_feishu
+        start_feishu()
     else:
-        from core.loop import MonadLoop
-        monad = MonadLoop()
-        monad.start()
+        from monad.interface.web import start_web
+        start_web()
 
 
 if __name__ == "__main__":
