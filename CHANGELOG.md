@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.2] - 2026-03-11
+
+### Fixed
+- **CSS Selector Fallback**: When a CSS selector matches nothing across all fetch modes, `_auto_fetch` now automatically retries without the selector instead of failing outright. Previously a bad selector (e.g. `main, .content, article` on a site that uses different element names) would cause all three modes to return ~36 chars and give up.
+
 ## [0.2.1] - 2026-03-11
 
 ### Fixed

@@ -94,7 +94,12 @@ def _auto_fetch(url: str, selector: str, wait_selector: str, timeout: int) -> st
     except Exception as e:
         errors.append(f"browser: {_short_error(e)}")
 
-    # All modes failed
+    # All modes failed — if a selector was specified, retry without it
+    if selector:
+        retry_result = _auto_fetch(url, "", wait_selector, timeout)
+        if _is_good_content(retry_result):
+            return f"[selector '{selector}' matched nothing, fetched full page instead]\n{retry_result}"
+
     fallback = "\n".join(f"  - {e}" for e in errors)
     return (
         f"[web_fetch] All modes failed for {url}:\n{fallback}\n\n"
