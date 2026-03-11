@@ -65,7 +65,8 @@ class Reflection:
         Output.learning(f"执行记录已保存: {filepath.name}")
 
         # Save concise experience for future context
-        exp_path = self.vault.save_experience(task_desc, summary)
+        success = execution_result.get("success", False)
+        exp_path = self.vault.save_experience(task_desc, summary, success=success)
         Output.learning(f"反思经验已沉淀: {exp_path.name}")
         return summary
 

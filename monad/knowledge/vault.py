@@ -96,8 +96,28 @@ class KnowledgeVault:
         return "\n\n".join(skills)
 
     def load_experiences(self) -> str:
-        """Load accumulated experiences."""
-        return self._load_dir(self.config.experiences_path)
+        """Load accumulated experiences, filtering out failed ones.
+
+        Only experiences tagged with [SUCCESS] are injected into reasoning
+        context. Failed experiences are kept on disk for the record but
+        excluded to prevent "experience pollution" — wrong conclusions
+        from past failures misleading future reasoning.
+        """
+        filepath = self.config.experiences_path / "accumulated_experiences.md"
+        if not filepath.exists():
+            return ""
+
+        text = filepath.read_text(encoding="utf-8")
+        blocks = text.split("\n---\n")
+        successful = []
+        for block in blocks:
+            stripped = block.strip()
+            if not stripped:
+                continue
+            if "[FAILED]" in stripped:
+                continue
+            successful.append(stripped)
+        return "\n\n---\n\n".join(successful)
 
     def load_all_context(self) -> dict:
         """Load all knowledge needed for Planner reasoning."""
@@ -135,10 +155,19 @@ class KnowledgeVault:
         filepath.write_text(content, encoding="utf-8")
         return filepath
 
-    def save_experience(self, query: str, reflection: str) -> Path:
-        """Save a concise experience (Query + Reflection) for future context."""
+    def save_experience(self, query: str, reflection: str, success: bool = True) -> Path:
+        """Save a concise experience (Query + Reflection) for future context.
+
+        Args:
+            query: The original user request
+            reflection: LLM-generated reflection summary
+            success: Whether the task succeeded. Failed experiences are
+                     tagged [FAILED] and excluded from future reasoning
+                     context to prevent experience pollution.
+        """
         filepath = self.config.experiences_path / "accumulated_experiences.md"
-        content = f"### 历史任务: {query}\n{reflection}\n\n---\n\n"
+        tag = "[SUCCESS]" if success else "[FAILED]"
+        content = f"### 历史任务: {query} {tag}\n{reflection}\n\n---\n\n"
         with open(filepath, "a", encoding="utf-8") as f:
             f.write(content)
         return filepath

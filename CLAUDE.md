@@ -12,7 +12,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **File System as Database**: All knowledge (axioms, skills, experiences, user context) stored as markdown files. No vector DB, no RAG.
 - **Absolute Rationality**: Follows strict reasoning loop: Analyze → Self-check → Learn → Execute → Reflect
 - **Search First Principle**: When stuck (errors, missing packages), MONAD uses `web_fetch` to search for solutions, never guesses. Only asks user when the query itself is unclear.
+- **URL-First Principle**: When the user provides a specific URL, MONAD must access it directly first, not search for it. Search engines are a fallback.
 - **LLM as Command Executor**: LLM training data is disregarded. All factual information must be retrieved from real world via code execution or web perception.
+- **Experience Hygiene**: Failed experiences are tagged `[FAILED]` and excluded from reasoning context to prevent experience pollution.
 
 ### Basic Capabilities (4 "Instincts")
 

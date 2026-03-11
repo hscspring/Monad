@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.5] - 2026-03-11
+
+### Added
+- **Experience Hygiene Mechanism**: Failed experiences are now tagged `[FAILED]` and excluded from future reasoning context. Prevents "experience pollution" where wrong conclusions from past failures (e.g., "web_fetch can't handle JS pages") mislead the LLM in subsequent tasks. Successful experiences are tagged `[SUCCESS]`; untagged legacy experiences are loaded normally for backward compatibility.
+
+### Changed
+- **Design Philosophy Documentation**: Added "URL-First Principle" and "Experience Hygiene" as formal design principles in README.md, README_zh.md, and CLAUDE.md — elevated from system prompt tweaks to documented architectural decisions.
+
 ## [0.2.4] - 2026-03-11
 
 ### Added

@@ -34,6 +34,8 @@ Instead, it **autonomously learns** how to complete your tasks by writing and ex
 *   **LLM as a Command Executor:** The LLM's own training data is disregarded. All factual information must be retrieved from the real world via code execution or web perception.
 *   **Stateless Message Management:** Every user request starts with a fresh, clean message context. MONAD doesn't rely on LLM Chat History; instead, it persists vital information via reflection loops. This ensures reasoning purity and prevents hallucination buildup from long conversations.
 *   **Search First, Ask Later:** When stuck during execution (errors, missing packages, unfamiliar tools), MONAD's first instinct is to search the web via `web_fetch`, never to guess. But if the user's intent is unclear, MONAD asks the user first. In short: **unclear query → ask user; execution problem → search first**.
+*   **URL-First Principle:** When the user provides a specific URL or domain (e.g., *"Analyze kexue.fm"*), MONAD must directly access that URL first, not detour through a search engine. Search engines are a fallback, not the default when a target is already known.
+*   **Experience Hygiene:** After each task, MONAD reflects and saves experiences. However, failed experiences are tagged `[FAILED]` and excluded from future reasoning context—preventing "experience pollution" where wrong conclusions from past failures mislead future tasks.
 
 ---
 
