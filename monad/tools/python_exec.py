@@ -4,9 +4,14 @@ The most important basic capability — execute Python code.
 MONAD learns everything through this.
 """
 
+import os
 import sys
 import io
 import traceback
+from pathlib import Path
+
+MONAD_OUTPUT_DIR = Path(os.path.expanduser("~")) / ".monad" / "output"
+MONAD_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def run(code: str = "", **kwargs) -> str:
@@ -39,8 +44,14 @@ def run(code: str = "", **kwargs) -> str:
         sys.stdout = captured_out
         sys.stderr = captured_err
 
-        # Execute in a namespace that persists across calls
-        exec_globals = {"__builtins__": __builtins__}
+        # Snapshot output dir before execution
+        before = set(MONAD_OUTPUT_DIR.iterdir()) if MONAD_OUTPUT_DIR.exists() else set()
+
+        # Execute — inject MONAD_OUTPUT_DIR so LLM code can save files there
+        exec_globals = {
+            "__builtins__": __builtins__,
+            "MONAD_OUTPUT_DIR": str(MONAD_OUTPUT_DIR),
+        }
         exec(code, exec_globals)
 
         stdout_val = captured_out.getvalue()
@@ -51,6 +62,16 @@ def run(code: str = "", **kwargs) -> str:
             result_parts.append(stdout_val.strip())
         if stderr_val.strip():
             result_parts.append(f"[stderr] {stderr_val.strip()}")
+
+        # Detect new files in output dir and emit download links
+        after = set(MONAD_OUTPUT_DIR.iterdir()) if MONAD_OUTPUT_DIR.exists() else set()
+        new_files = after - before
+        if new_files:
+            from monad.interface.output import Output
+            for f in sorted(new_files):
+                url = f"/output/{f.name}"
+                Output.file_link(str(f), url)
+                result_parts.append(f"[file saved] {f.name} → {url}")
 
         return "\n".join(result_parts) if result_parts else "(executed successfully, no output)"
 

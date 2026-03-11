@@ -49,13 +49,17 @@ def monad_worker():
 
 app = FastAPI(title="MONAD Web Interface")
 
-# Mount static files
+# Mount static files (frontend assets)
 static_dir = os.path.dirname(__file__)
 static_path = os.path.join(static_dir, "static")
 if not os.path.exists(static_path):
     os.makedirs(static_path)
-    
 app.mount("/static", StaticFiles(directory=static_path), name="static")
+
+# Mount output directory for file downloads
+output_path = os.path.join(os.path.expanduser("~"), ".monad", "output")
+os.makedirs(output_path, exist_ok=True)
+app.mount("/output", StaticFiles(directory=output_path), name="output")
 
 @app.get("/")
 async def get_index():

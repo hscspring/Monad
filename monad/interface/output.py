@@ -15,7 +15,7 @@ class Output:
 
     BANNER = r"""
     ╔══════════════════════════════════════╗
-    ║          M O N A D  v0.2.3           ║
+    ║          M O N A D  v0.2.4           ║
     ║    Personal AGI Operating Core       ║
     ╚══════════════════════════════════════╝
     """
@@ -84,16 +84,15 @@ class Output:
 
     @staticmethod
     def result(msg: str):
-        """Print a final result message."""
+        """Print the final answer — shown in the chat panel."""
         Output._emit("[__WS_RESULT_START__]")
-        lines = [
-            f"\n[MONAD] 📦 结果:",
-            f"{'═' * 40}",
-            str(msg),
-            f"{'═' * 40}\n"
-        ]
-        Output._emit("\n".join(lines))
+        Output._emit(str(msg))
         Output._emit("[__WS_RESULT_END__]")
+
+    @staticmethod
+    def file_link(filepath: str, url: str):
+        """Emit a file-output marker so the frontend shows a download link."""
+        Output._emit(f"[__WS_FILE__]{filepath}|{url}[__WS_FILE_END__]")
 
     @staticmethod
     def error(msg: str):

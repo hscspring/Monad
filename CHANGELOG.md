@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.4] - 2026-03-11
+
+### Added
+- **File Output System**: When MONAD generates files (reports, data exports, etc.), they are saved to `~/.monad/output/` and a download link is shown in the web UI's files panel. The web server mounts this directory at `/output/` for browser downloads.
+- **MONAD_OUTPUT_DIR**: `python_exec` now injects this variable into the execution namespace. After execution, new files in the output directory are automatically detected and download links are emitted.
+- **Simple Markdown Rendering**: MONAD's chat answers now render basic markdown (headers, bold, lists, dividers) instead of raw text.
+
+### Changed
+- **Clean Answer Display**: Removed the `═` decorator borders from `Output.result()`. Answers now appear as clean text in the chat panel.
+- **System Prompt**: Instructs the LLM to only save files when the user explicitly asks for a report/export, and to use `MONAD_OUTPUT_DIR` for the path.
+
 ## [0.2.3] - 2026-03-11
 
 ### Fixed
