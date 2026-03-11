@@ -5,4 +5,4 @@ python-dotenv>=1.0.0
 scrapling>=0.4
 # Optional: for web_fetch stealth/browser modes
 # pip install 'scrapling[all]'
-# python -m playwright install chromium
+# browser mode uses system Chrome — no need to run 'playwright install'

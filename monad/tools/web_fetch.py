@@ -6,7 +6,7 @@ Four modes:
   - auto:    Smart auto-fallback: fast → stealth → browser (DEFAULT)
   - fast:    HTTP request with smart parsing (requests + Scrapling parser)
   - stealth: Headless browser with anti-bot bypass (Scrapling StealthyFetcher)
-  - browser: Full Playwright Chromium, JS rendering (Scrapling DynamicFetcher)
+  - browser: Full browser with JS rendering, uses system Chrome (Scrapling DynamicFetcher)
 """
 
 import traceback
@@ -126,11 +126,12 @@ def _fetch_stealth(url: str, selector: str, timeout: int) -> str:
 
 
 def _fetch_browser(url: str, selector: str, wait_selector: str, timeout: int) -> str:
-    """Full browser rendering with Playwright Chromium."""
+    """Full browser rendering via system Chrome (no separate chromium install needed)."""
     from scrapling.fetchers import DynamicFetcher
 
     fetch_kwargs = {
         "headless": True,
+        "real_chrome": True,
         "timeout": timeout * 1000,  # Playwright uses ms
         "network_idle": True,
     }
@@ -232,7 +233,7 @@ def _import_error_msg(mode: str, e: Exception) -> str:
     """Generate helpful error message for missing dependencies."""
     hints = {
         "stealth": "pip install 'scrapling[stealth]' (requires camoufox)",
-        "browser": "pip install playwright && python -m playwright install chromium",
+        "browser": "pip install playwright (requires Chrome browser installed on system)",
     }
     hint = hints.get(mode, "pip install requests")
     return f"Error: Missing dependency for '{mode}' mode.\nInstall: {hint}\nDetail: {e}"

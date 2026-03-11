@@ -105,13 +105,7 @@ cd Monad
 pip install -e .
 ```
 
-**2. Install Browser Engine (Required)**
-MONAD's `web_fetch` capability requires the Chromium browser engine to parse dynamic web pages:
-```bash
-playwright install chromium
-```
-
-**3. Configure your LLM**
+**2. Configure your LLM**
 On your first run, MONAD will initialize its workspace in `~/.monad/`. Update `~/.monad/.env` with your LLM Base URL, API Key, and Model name. 
 > **Note**: If you don't configure this manually, MONAD will guide you through an interactive setup with connectivity validation on your first launch.
 

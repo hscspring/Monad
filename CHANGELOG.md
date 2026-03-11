@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.1] - 2026-03-11
+
+### Fixed
+- **Reasoner Thought Loop**: Added loop detection (Jaccard similarity) and consecutive-thought counter with escalating prompts to break out of repetitive thinking cycles that previously exhausted all 15 turns.
+- **History Context Bloat**: Thoughts stored in history are now capped (400 chars) and total history is trimmed (last 30 entries) to prevent context overflow causing LLM output truncation.
+- **System Prompt Tightening**: Thoughts must be concise (1-3 sentences); consecutive thoughts without action are now explicitly forbidden; stronger follow-up prompts guide the LLM toward action.
+
+### Changed
+- **Browser Mode Uses System Chrome**: `web_fetch` browser mode now uses `real_chrome=True`, leveraging the user's installed Chrome browser instead of requiring a separate `playwright install chromium` step. This eliminates the most error-prone part of installation.
+- **Simplified Installation**: Removed the `playwright install chromium` step from README and all documentation. Users only need `pip install` and a Chrome browser.
+- **web_fetch Prompt**: System prompt no longer lists individual modes; tells the LLM to never manually specify `mode`, letting the auto fallback chain handle everything.
+
 ## [0.2.0] - 2026-03-10
 
 ### Added

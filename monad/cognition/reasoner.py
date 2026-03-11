@@ -9,9 +9,24 @@ This is the brain of MONAD. Every step is printed so the user can see the proces
 """
 
 import json
+import re
 from monad.core.llm import llm_call
 from monad.knowledge.vault import KnowledgeVault
 from monad.interface.output import Output
+
+
+# After this many consecutive thoughts without action, escalate the prompt
+_THOUGHT_SOFT_LIMIT = 2
+_THOUGHT_HARD_LIMIT = 4
+
+# Jaccard word-overlap threshold to consider two thoughts "the same"
+_SIMILARITY_THRESHOLD = 0.6
+
+# Max characters to store per thought in history (prevents context bloat)
+_THOUGHT_HISTORY_CAP = 400
+
+# Keep only the last N history entries to prevent context overflow
+_HISTORY_CAP = 30
 
 
 REASONER_SYSTEM = """You are MONAD, a rational autonomous agent.
@@ -43,12 +58,9 @@ REASONER_SYSTEM = """You are MONAD, a rational autonomous agent.
 2. **shell**: 执行 Shell 命令。你的"口令"🗣️。
 
 3. **web_fetch**: 感知互联网。你的"眼睛"👁️——直接看到网页内容：
-   - mode="auto"（默认）：智能自动降级 fast→stealth→browser，自动选择最佳方式
-   - mode="fast"：快速 HTTP 请求，适合大多数网页
-   - mode="stealth"：隐身浏览器，可绕过 Cloudflare 等反爬
-   - mode="browser"：完整 Chromium 浏览器，JS 渲染，适合 SPA/动态页面
+   - 只需传 url 即可，系统会自动选择最佳抓取方式（fast→stealth→browser 智能降级）
    - selector：CSS 选择器，精确提取页面元素（可选）
-   - 这是获取互联网信息的首选方式！自动处理各种网页，无需手动选模式
+   - **不要手动指定 mode 参数**，默认的 auto 模式已经能处理所有情况
 
 4. **ask_user**: 确实无法独立完成时，向用户求助。你的"对话"💬。
 
@@ -127,9 +139,10 @@ REASONER_SYSTEM = """You are MONAD, a rational autonomous agent.
 6. 实在无法通过搜索和执行解决，才用 ask_user 求助。ask_user 是最后手段。
 7. 失败了要多次尝试不同方法。
 8. 始终用中文回答。
-9. 先 thought 思考，再 action 行动。
+9. 先 thought 简短思考（1-3句话），然后立刻 action 行动。**禁止连续多轮 thought 而不执行 action。**
 10. Python 代码中必须包含 print() 语句。
-11. [CRITICAL] 每次回复只能输出一个纯 JSON 对象，不能输出多个。绝对禁止输出任何 XML/HTML 标签（如 `<think>`, `<minimax:tool_call>`, `<invoke>`）。你的输出将被直接用 `json.loads` 解析，如果有任何多余字符将导致系统崩溃！"""
+11. [CRITICAL] 每次回复只能输出一个纯 JSON 对象，不能输出多个。绝对禁止输出任何 XML/HTML 标签（如 `<think>`, `<minimax:tool_call>`, `<invoke>`）。你的输出将被直接用 `json.loads` 解析，如果有任何多余字符将导致系统崩溃！
+12. [CRITICAL] thought 必须简短精炼（最多 3-5 句话），不要写长篇分析或反思。详细的分析放在最终 answer 里。"""
 
 MAX_TURNS = 15
 
@@ -160,6 +173,7 @@ class Reasoner:
         history = []
         thoughts = []
         actions = []
+        consecutive_thoughts = 0
 
         for turn in range(MAX_TURNS):
             Output.phase(f"Reasoning Turn {turn + 1}/{MAX_TURNS}")
@@ -187,14 +201,58 @@ class Reasoner:
             # ── Handle: THOUGHT ──────────────────────────────
             if parsed["type"] == "thought":
                 content = parsed["content"]
+                consecutive_thoughts += 1
                 thoughts.append(content)
-                history.append({"role": "assistant", "content": raw_response})
-                history.append({"role": "user", "content": "Continue. What will you do next?"})
+
+                # Store a capped version in history to prevent context bloat
+                capped = content[:_THOUGHT_HISTORY_CAP]
+                if len(content) > _THOUGHT_HISTORY_CAP:
+                    capped += "...(truncated)"
+                history.append({"role": "assistant", "content":
+                    json.dumps({"type": "thought", "content": capped}, ensure_ascii=False)
+                })
 
                 Output.thinking(content)
 
+                # --- Loop detection ---
+                is_loop = (
+                    len(thoughts) >= 2
+                    and self._thought_similarity(thoughts[-1], thoughts[-2]) > _SIMILARITY_THRESHOLD
+                )
+
+                if is_loop:
+                    Output.warn(f"检测到重复思考，强制要求执行动作")
+                    history.append({"role": "user", "content":
+                        "STOP. You are repeating the same thought. "
+                        "Do NOT think again. You MUST output an action JSON now. "
+                        "Pick one: web_fetch, python_exec, shell, or ask_user. "
+                        "If you have enough info, output an answer JSON."
+                    })
+                elif consecutive_thoughts >= _THOUGHT_HARD_LIMIT:
+                    Output.warn(f"连续思考 {consecutive_thoughts} 轮，强制要求动作")
+                    history.append({"role": "user", "content":
+                        "You have been thinking too long without acting. "
+                        "You MUST take an action NOW or give your final answer. "
+                        "Output a JSON with type='action' or type='answer'. "
+                        "Do NOT output another thought."
+                    })
+                elif consecutive_thoughts >= _THOUGHT_SOFT_LIMIT:
+                    history.append({"role": "user", "content":
+                        "You've thought enough. Now take action. "
+                        "What specific action (web_fetch/python_exec/shell) will you execute?"
+                    })
+                else:
+                    history.append({"role": "user", "content":
+                        "Good. Now take action based on your analysis. What will you do?"
+                    })
+
+                continue
+
+            # Reset consecutive thought counter on any non-thought response
+            consecutive_thoughts = 0
+
             # ── Handle: ACTION ───────────────────────────────
-            elif parsed["type"] == "action":
+            if parsed["type"] == "action":
                 capability = parsed.get("capability", "")
                 params = parsed.get("params", {})
                 actions.append({"capability": capability, "params": params})
@@ -210,7 +268,7 @@ class Reasoner:
                     Output.action("shell", f"执行命令: {cmd}")
                 elif capability == "web_fetch":
                     url = params.get("url", "")
-                    fetch_mode = params.get("mode", "fast")
+                    fetch_mode = params.get("mode", "auto")
                     sel = params.get("selector", "")
                     desc = f"感知网页: {url} (模式: {fetch_mode})"
                     if sel:
@@ -248,13 +306,16 @@ class Reasoner:
             # ── Handle: PARSE ERROR ──────────────────────────
             elif parsed["type"] == "error":
                 Output.warn(f"LLM 返回格式异常，正在重试... (原始: {raw_response[:150]})")
-                history.append({"role": "assistant", "content": raw_response})
+                # Store only a short snippet to avoid polluting history with garbage
+                history.append({"role": "assistant", "content": raw_response[:300]})
                 history.append({
                     "role": "user",
                     "content": (
                         "Your response was not valid JSON. "
-                        "Please respond with ONLY a JSON object. "
-                        "No markdown, no extra text, no code fences. Just pure JSON."
+                        "You MUST respond with ONLY a JSON object. "
+                        "No markdown, no extra text, no code fences, no XML tags. "
+                        "Example: {\"type\": \"action\", \"capability\": \"web_fetch\", "
+                        "\"params\": {\"url\": \"https://example.com\"}}"
                     ),
                 })
 
@@ -308,13 +369,30 @@ class Reasoner:
 
         return "\n\n".join(sections)
 
+    @staticmethod
+    def _thought_similarity(a: str, b: str) -> float:
+        """Jaccard similarity between two thought strings (word-level)."""
+        words_a = set(a.split())
+        words_b = set(b.split())
+        if not words_a or not words_b:
+            return 0.0
+        return len(words_a & words_b) / len(words_a | words_b)
+
     def _build_prompt(self, context: str, history: list) -> str:
-        """Build the full prompt for the LLM."""
+        """Build the full prompt for the LLM.
+
+        Trims old history to stay within a reasonable context budget.
+        """
         parts = [context]
 
-        if history:
-            parts.append("\n## Reasoning History")
-            for msg in history:
+        trimmed = history[-_HISTORY_CAP:] if len(history) > _HISTORY_CAP else history
+
+        if trimmed:
+            if len(trimmed) < len(history):
+                parts.append(f"\n## Reasoning History (latest {len(trimmed)} of {len(history)} entries)")
+            else:
+                parts.append("\n## Reasoning History")
+            for msg in trimmed:
                 role = "You" if msg["role"] == "assistant" else "System"
                 parts.append(f"\n[{role}]: {msg['content']}")
 
@@ -361,7 +439,6 @@ class Reasoner:
         cleaned = raw.strip()
 
         # Strip <think>...</think> blocks (Minimax model leakage)
-        import re
         cleaned = re.sub(r'<think>.*?</think>', '', cleaned, flags=re.DOTALL).strip()
         # Also strip unclosed <think> blocks (truncated responses)
         cleaned = re.sub(r'<think>.*$', '', cleaned, flags=re.DOTALL).strip()

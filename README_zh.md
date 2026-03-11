@@ -97,13 +97,7 @@ cd Monad
 pip install -e .
 ```
 
-**2. 安装浏览器内核（必须）**
-MONAD 的 `web_fetch` 能力依赖 Chromium 来抓取动态网页：
-```bash
-playwright install chromium
-```
-
-**3. 配置模型**
+**2. 配置模型**
 首次运行时，MONAD 会自动在 `~/.monad/` 生成工作区。请修改 `~/.monad/.env` 中的 LLM Base URL、API Key 和模型名称。
 > **提示**：如果你未手动配置，首次启动时 MONAD 会自动进入交互式配置引导，并在线验证 API 连通性。
 
