@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.3] - 2026-03-11
+
+### Fixed
+- **URL-First Principle**: Added explicit rule in system prompt — when the user provides a specific URL/domain, MONAD must `web_fetch` that URL directly first, not search for it on Bing. Previously the "search first" principle was over-applied, causing MONAD to detour through Bing even when the target URL was right in the user's request.
+- **Reflection Think-Tag Leakage**: LLM `<think>` blocks are now stripped from reflection summaries before saving to the experience file. Previously raw think tokens polluted the knowledge base, wasting context and adding noise.
+- **Stale Experience Cleanup**: Removed outdated kexue.fm failure experiences that were misleading the LLM into avoiding direct page access (based on pre-fix web_fetch behavior).
+
 ## [0.2.2] - 2026-03-11
 
 ### Fixed

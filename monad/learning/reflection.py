@@ -3,9 +3,18 @@ MONAD Learning: Reflection
 Analyzes task execution results and saves experiences to knowledge vault.
 """
 
+import re
 from monad.core.llm import llm_call
 from monad.knowledge.vault import KnowledgeVault
 from monad.interface.output import Output
+
+
+def _clean_llm_output(text: str) -> str:
+    """Strip <think> blocks and XML tag leakage from LLM output."""
+    text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
+    text = re.sub(r'<think>.*$', '', text, flags=re.DOTALL)
+    text = re.sub(r'</?(?:think|minimax:tool_call|invoke|parameter)[^>]*>', '', text)
+    return text.strip()
 
 
 REFLECTION_SYSTEM = """You are MONAD's Reflection module.
@@ -33,7 +42,8 @@ class Reflection:
 
         Output.system("正在调用 LLM 分析执行经验...")
         try:
-            summary = llm_call(prompt, system=REFLECTION_SYSTEM, temperature=0.3)
+            raw = llm_call(prompt, system=REFLECTION_SYSTEM, temperature=0.3)
+            summary = _clean_llm_output(raw)
         except Exception as e:
             Output.error(f"反思失败: {str(e)}")
             summary = f"Reflection failed: {str(e)}"
