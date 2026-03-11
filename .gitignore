@@ -1,6 +1,6 @@
 # Byte-compiled / optimized / DLL files
-knowledge/experiences/
-*.html
+monad/knowledge/experiences/
+monad/knowledge/records/
 __pycache__/
 *.py[cod]
 *$py.class

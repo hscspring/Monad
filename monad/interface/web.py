@@ -5,8 +5,8 @@ import asyncio
 import webbrowser
 import logging
 import uvicorn
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from monad.core.loop import MonadLoop
@@ -60,6 +60,20 @@ app.mount("/static", StaticFiles(directory=static_path), name="static")
 output_path = os.path.join(os.path.expanduser("~"), ".monad", "output")
 os.makedirs(output_path, exist_ok=True)
 app.mount("/output", StaticFiles(directory=output_path), name="output")
+
+# Input directory for uploaded files
+input_path = os.path.join(os.path.expanduser("~"), ".monad", "input")
+os.makedirs(input_path, exist_ok=True)
+
+@app.post("/upload")
+async def upload_file(file: UploadFile = File(...)):
+    """Accept file uploads, save to ~/.monad/input/, return the local path."""
+    safe_name = file.filename.replace("/", "_").replace("\\", "_")
+    dest = os.path.join(input_path, safe_name)
+    content = await file.read()
+    with open(dest, "wb") as f:
+        f.write(content)
+    return JSONResponse({"path": dest, "filename": safe_name, "size": len(content)})
 
 @app.get("/")
 async def get_index():

@@ -85,23 +85,29 @@ class KnowledgeVault:
                     goal = data.get("goal", "")
                     inputs = data.get("inputs", [])
                     steps = data.get("steps", [])
-                    skills.append(
+                    triggers = data.get("triggers", [])
+                    entry = (
                         f"Skill: {name}\n"
                         f"  Goal: {goal}\n"
                         f"  Inputs: {', '.join(inputs)}\n"
                         f"  Steps: {' → '.join(steps)}"
                     )
+                    if triggers:
+                        entry += f"\n  Triggers: {'; '.join(triggers)}"
+                    skills.append(entry)
                 except Exception:
                     continue
         return "\n\n".join(skills)
 
-    def load_experiences(self) -> str:
-        """Load accumulated experiences, filtering out failed ones.
+    def load_experiences(self, query: str = "") -> str:
+        """Load relevant experiences by tag matching, filtering out failed ones.
 
-        Only experiences tagged with [SUCCESS] are injected into reasoning
-        context. Failed experiences are kept on disk for the record but
-        excluded to prevent "experience pollution" — wrong conclusions
-        from past failures misleading future reasoning.
+        Uses keyword overlap between the user query and experience tags
+        to select relevant past experiences. Always includes the most
+        recent few as fallback context.
+
+        Args:
+            query: Current user request, used for relevance matching.
         """
         filepath = self.config.experiences_path / "accumulated_experiences.md"
         if not filepath.exists():
@@ -109,18 +115,81 @@ class KnowledgeVault:
 
         text = filepath.read_text(encoding="utf-8")
         blocks = text.split("\n---\n")
-        successful = []
+
+        # Parse all successful blocks with their tags + title keywords
+        entries = []  # (block_text, keywords_set)
         for block in blocks:
             stripped = block.strip()
-            if not stripped:
+            if not stripped or "[FAILED]" in stripped:
                 continue
-            if "[FAILED]" in stripped:
-                continue
-            successful.append(stripped)
-        return "\n\n---\n\n".join(successful)
+            keywords = set()
+            for line in stripped.split("\n"):
+                line_s = line.strip()
+                # Extract from Tags line
+                if line_s.lower().startswith("tags:") or line_s.startswith("5."):
+                    raw = line_s.split(":", 1)[-1] if ":" in line_s else line_s
+                    for token in raw.replace("#", " ").replace("，", " ").replace(",", " ").split():
+                        token = token.strip().lower()
+                        if len(token) >= 2:
+                            keywords.add(token)
+                # Extract from title line (e.g. "### 历史任务: 分析 kexue.fm [SUCCESS]")
+                elif line_s.startswith("### 历史任务:"):
+                    title = line_s.split(":", 1)[-1]
+                    title = title.replace("[SUCCESS]", "").replace("[FAILED]", "").strip()
+                    for token in title.lower().replace(",", " ").replace("，", " ").split():
+                        token = token.strip()
+                        if len(token) >= 2:
+                            keywords.add(token)
+            entries.append((stripped, keywords))
 
-    def load_all_context(self) -> dict:
-        """Load all knowledge needed for Planner reasoning."""
+        if not entries:
+            return ""
+
+        MAX_EXPERIENCES = 10
+        RECENT_FALLBACK = 3
+
+        # Tokenize query for matching
+        query_tokens = set()
+        if query:
+            for t in query.lower().replace(",", " ").replace("，", " ").split():
+                t = t.strip()
+                if len(t) >= 2:
+                    query_tokens.add(t)
+
+        # Score each entry: keyword overlap + substring match
+        matched = []
+        for i, (block_text, keywords) in enumerate(entries):
+            if not query_tokens or not keywords:
+                continue
+            overlap = query_tokens & keywords
+            if not overlap:
+                for qt in query_tokens:
+                    for kw in keywords:
+                        if qt in kw or kw in qt:
+                            overlap = {qt}
+                            break
+                    if overlap:
+                        break
+            if overlap:
+                matched.append(i)
+
+        # Always include the most recent N as fallback
+        recent_indices = set(range(max(0, len(entries) - RECENT_FALLBACK), len(entries)))
+
+        # Combine: matched + recent, deduplicated, capped
+        selected_indices = sorted(set(matched) | recent_indices)
+        selected_indices = selected_indices[-MAX_EXPERIENCES:]
+
+        result = [entries[i][0] for i in selected_indices]
+        return "\n\n---\n\n".join(result)
+
+    def load_all_context(self, query: str = "") -> dict:
+        """Load all knowledge needed for Planner reasoning.
+
+        Args:
+            query: Current user request, passed to load_experiences()
+                   for tag-based relevance filtering.
+        """
         return {
             "axioms": self.load_axioms(),
             "environment": self.load_environment(),
@@ -128,7 +197,7 @@ class KnowledgeVault:
             "skills": self.load_skills(),
             "protocols": self.load_protocols(),
             "user_context": self.load_user_context(),
-            "experiences": self.load_experiences(),
+            "experiences": self.load_experiences(query=query),
         }
 
     # ── Write Operations ─────────────────────────────────────────
@@ -155,7 +224,8 @@ class KnowledgeVault:
         filepath.write_text(content, encoding="utf-8")
         return filepath
 
-    def save_experience(self, query: str, reflection: str, success: bool = True) -> Path:
+    def save_experience(self, query: str, reflection: str, success: bool = True,
+                        tags: list = None) -> Path:
         """Save a concise experience (Query + Reflection) for future context.
 
         Args:
@@ -164,26 +234,32 @@ class KnowledgeVault:
             success: Whether the task succeeded. Failed experiences are
                      tagged [FAILED] and excluded from future reasoning
                      context to prevent experience pollution.
+            tags: Keywords for relevance matching on future loads.
         """
         filepath = self.config.experiences_path / "accumulated_experiences.md"
-        tag = "[SUCCESS]" if success else "[FAILED]"
-        content = f"### 历史任务: {query} {tag}\n{reflection}\n\n---\n\n"
+        status_tag = "[SUCCESS]" if success else "[FAILED]"
+        tag_line = ""
+        if tags:
+            tag_line = f"\nTags: {' '.join('#' + t for t in tags)}\n"
+        content = f"### 历史任务: {query} {status_tag}\n{reflection}{tag_line}\n\n---\n\n"
         with open(filepath, "a", encoding="utf-8") as f:
             f.write(content)
         return filepath
 
-    def save_skill(self, name: str, goal: str, inputs: list, steps: list, code: str = "") -> Path:
+    def save_skill(self, name: str, goal: str, inputs: list, steps: list,
+                   code: str = "", triggers: list = None) -> Path:
         """Save a new skill to the skill tree."""
         skill_dir = self.config.skills_path / name
         skill_dir.mkdir(parents=True, exist_ok=True)
 
-        # Save skill.yaml
         skill_data = {
             "name": name,
             "goal": goal,
             "inputs": inputs,
             "steps": steps,
         }
+        if triggers:
+            skill_data["triggers"] = triggers
         yaml_path = skill_dir / "skill.yaml"
         yaml_path.write_text(yaml.dump(skill_data, allow_unicode=True, default_flow_style=False), encoding="utf-8")
 

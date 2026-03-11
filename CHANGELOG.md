@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.0] - 2026-03-11
+
+### Added
+- **File Upload**: Users can attach files via the web UI (📎 button). Files are saved to `~/.monad/input/` and the path is injected into the user's message as `[attached: /path/to/file]`. The LLM can then read/parse the file using `python_exec` or learned skills.
+- **Skill Triggers**: Skills now support a `triggers` field in `skill.yaml` — natural language descriptions of when the skill should be used. Displayed in the skills context to help the LLM match tasks to skills more accurately.
+- **Skill Creation Guide in System Prompt**: The LLM now knows the exact file structure (`skill.yaml` + `executor.py`), directory path, and format needed to create new skills. Users can teach MONAD new skills through chat (e.g., "learn a document parsing skill using docling").
+- **File Attachment Protocol**: System prompt includes instructions for handling `[attached: ...]` file markers, guiding the LLM to use appropriate parsing methods.
+
+### Changed
+- **MAX_TURNS increased to 30**: Up from 15, giving MONAD more room for complex multi-step tasks like learning new skills (install deps → read docs → test → save skill).
+- **Dependency**: Added `python-multipart` for FastAPI file upload support.
+
 ## [0.2.5] - 2026-03-11
 
 ### Added

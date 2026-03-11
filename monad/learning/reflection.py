@@ -64,11 +64,37 @@ class Reflection:
         )
         Output.learning(f"执行记录已保存: {filepath.name}")
 
+        # Extract tags from reflection summary
+        tags = self._extract_tags(summary)
+
         # Save concise experience for future context
         success = execution_result.get("success", False)
-        exp_path = self.vault.save_experience(task_desc, summary, success=success)
+        exp_path = self.vault.save_experience(task_desc, summary, success=success, tags=tags)
         Output.learning(f"反思经验已沉淀: {exp_path.name}")
         return summary
+
+    @staticmethod
+    def _extract_tags(summary: str) -> list:
+        """Extract tags from reflection summary.
+
+        Looks for lines like "Tags: #web_fetch #PDF #解析" or
+        "5. Tags: web_fetch, PDF, 解析" in the LLM output.
+        """
+        tags = []
+        for line in summary.split("\n"):
+            stripped = line.strip()
+            if not stripped:
+                continue
+            # Match lines starting with "Tags:" or "5. Tags:" or "5."
+            lower = stripped.lower()
+            if lower.startswith("tags:") or lower.startswith("5. tags:") or lower.startswith("5."):
+                raw = stripped.split(":", 1)[-1] if ":" in stripped else stripped
+                for token in raw.replace("#", " ").replace("，", " ").replace(",", " ").split():
+                    token = token.strip().strip("#").lower()
+                    if len(token) >= 2:
+                        tags.append(token)
+                break
+        return tags
 
     def _build_prompt(self, objective: dict, execution_result: dict) -> str:
         """Build reflection prompt."""

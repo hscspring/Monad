@@ -6,12 +6,12 @@ Execute shell commands and return output.
 import subprocess
 
 
-def run(command: str = "", timeout: int = 30, **kwargs) -> str:
+def run(command: str = "", timeout: int = 120, **kwargs) -> str:
     """Execute a shell command and return its output.
 
     Args:
         command: The shell command to execute
-        timeout: Maximum execution time in seconds (default: 30)
+        timeout: Maximum execution time in seconds (default: 120)
     """
     if not command:
         return "Error: No command specified."

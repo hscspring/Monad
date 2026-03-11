@@ -1,0 +1,13 @@
+name: parse_document
+goal: Parse documents (PDF, DOCX, PPTX, XLSX, HTML, images, etc.) into Markdown text using docling
+inputs:
+- file_path
+steps:
+- Create DocumentConverter instance
+- Convert the document at file_path
+- Export result to Markdown text
+- Return Markdown content
+triggers:
+- 用户上传了文件并要求解析或分析
+- 用户给出了文件路径并要求提取内容
+- 需要将 PDF/DOCX/PPTX 等文档转换为文本

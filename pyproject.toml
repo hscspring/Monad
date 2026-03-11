@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "monad-core"
-version = "0.2.5"
+version = "0.3.0"
 description = "Personal AGI Operating Core"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -27,6 +27,7 @@ dependencies = [
     "pyyaml>=6.0",
     "fastapi>=0.100.0",
     "uvicorn>=0.23.0",
+    "python-multipart>=0.0.6",
     "websockets>=11.0.3"
 ]
 
