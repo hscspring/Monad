@@ -50,8 +50,18 @@ def run(code: str = "", **kwargs) -> str:
         # Execute — inject MONAD_OUTPUT_DIR so LLM code can save files there
         exec_globals = {
             "__builtins__": __builtins__,
+            "os": os,
+            "sys": sys,
             "MONAD_OUTPUT_DIR": str(MONAD_OUTPUT_DIR),
         }
+        # Lazy-inject MONAD tools so LLM code & skills can call them
+        try:
+            from monad.tools.web_fetch import run as _wf
+            from monad.tools.shell import run as _sh
+            exec_globals["web_fetch"] = _wf
+            exec_globals["shell"] = _sh
+        except ImportError:
+            pass
         exec(code, exec_globals)
 
         stdout_val = captured_out.getvalue()

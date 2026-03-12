@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.1] - 2026-03-12
+
+### Added
+- **Experience Staging (Pending → Promote)**: New experiences no longer go directly into the long-term experience file. They first land in `pending.jsonl` as short-term memory. Only when the same tag pattern recurs ≥3 times is the experience promoted to `accumulated_experiences.md`. This prevents one-off incidents and ephemeral errors from polluting the reasoning context — inspired by OpenClaw's "≥3 times promote" rule.
+- **Post-Action Verification**: After `python_exec` or `shell` actions that involve skill creation (detected by path patterns), the Reasoner automatically verifies that the expected `skill.yaml` and `executor.py` files actually exist, appending verification results to the LLM observation. No more "I created the skill" hallucinations.
+- **Hollow Answer Guard**: When the user's task involves creation/saving keywords but the LLM attempts to output a final answer without having executed any write actions, the answer is rejected and the LLM is forced to actually perform the work. Addresses the pattern where LLMs describe completion in an `answer` without executing any `action`.
+- **Skill Deduplication**: Two-layer defense against duplicate skill creation:
+  - *Prompt layer*: System prompt now includes "Step 0 — Reuse First" in the skill creation guide, instructing the LLM to check existing skills and modify them instead of creating new ones when overlap exists.
+  - *SkillBuilder layer*: The auto-evaluation prompt now includes all existing skills and supports three actions: `skip` (no skill needed), `update` (modify existing skill), `create` (new skill). The LLM is instructed to prefer `update` over `create` when any existing skill has overlapping functionality.
+- **Built-in Skill: web_to_markdown**: Generic web page to Markdown converter using `web_fetch` + BeautifulSoup. Replaces the previous duplicate skills (convert_web_article_to_markdown, convert_wechat_article_to_markdown).
+- **Comprehensive Test Suite**: 92 new unit tests across 6 test files covering vault (experience staging, tag filtering, skill I/O), reasoner (JSON parsing, hollow answer guard, action verification), executor (capability routing, skill loading with tool injection), python_exec (injected globals), shell, and reflection (tag extraction, LLM output cleaning).
+
+### Changed
+- **Experience Save Flow**: `save_experience()` in `KnowledgeVault` now writes to `pending.jsonl` first, with automatic promotion and cluster cleanup logic.
+- **Skill Execution Path**: `Executor._try_skill()` now uses `CONFIG.skills_path` (always `~/.monad/knowledge/skills/`) instead of the package directory. MONAD's 4 tool functions (web_fetch, shell, python_exec, ask_user) are injected into skill modules at load time so skill code can call them directly.
+- **Knowledge Sync**: Bundled knowledge is now incrementally synced to user workspace — new files from package updates are copied without overwriting user modifications.
+- **python_exec Globals**: `os`, `sys`, `web_fetch`, and `shell` are pre-injected into the execution namespace so LLM-generated code doesn't need to import them.
+- **MONAD_OUTPUT_DIR Prompt**: System prompt now explicitly shows the resolved path (`~/.monad/output/`) and a code example, preventing the LLM from treating the variable name as a literal path string.
+
 ## [0.3.0] - 2026-03-11
 
 ### Added

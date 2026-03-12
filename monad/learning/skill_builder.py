@@ -1,6 +1,7 @@
 """
 MONAD Learning: Skill Builder
 Automatically generates reusable skills from task execution patterns.
+Supports both creating new skills and updating existing ones when overlap is detected.
 """
 
 import json
@@ -10,28 +11,36 @@ from monad.interface.output import Output
 
 
 SKILL_BUILDER_SYSTEM = """You are MONAD's Skill Builder module.
-Your job is to analyze a completed task and determine if a reusable skill can be created from it.
+Your job is to analyze a completed task and determine:
+1. Whether a reusable skill should be saved.
+2. Whether an EXISTING skill already covers this — if so, update it instead of creating a new one.
+
+You will be given the task details AND a list of existing skills.
 
 You MUST return valid JSON and NOTHING else. No markdown, no extra text.
 
-Return format:
-{
-  "should_create": true/false,
-  "skill": {
-    "name": "skill_name_in_snake_case",
-    "goal": "What this skill accomplishes",
-    "inputs": ["required_input_1", "required_input_2"],
-    "steps": ["step1_description", "step2_description"],
-    "code": "def run(**kwargs):\\n    # working Python code for this skill\\n    pass"
-  },
-  "reason": "Why this should/shouldn't become a skill"
-}
+Return ONE of these formats:
+
+Option A — No skill needed:
+{"action": "skip", "reason": "Why no skill is needed"}
+
+Option B — Update an existing skill (PREFERRED when there's overlap):
+{"action": "update", "target": "existing_skill_name", "reason": "Why this existing skill should be updated",
+ "skill": {"goal": "updated goal description", "inputs": ["param1"], "steps": ["step1"], "triggers": ["trigger1"],
+            "code": "def run(**kwargs):\\n    # updated working Python code\\n    pass"}}
+
+Option C — Create a new skill (ONLY when no existing skill is related):
+{"action": "create", "reason": "Why a new skill is needed",
+ "skill": {"name": "skill_name_in_snake_case", "goal": "What this skill accomplishes",
+            "inputs": ["param1"], "steps": ["step1"], "triggers": ["trigger1"],
+            "code": "def run(**kwargs):\\n    # working Python code\\n    pass"}}
 
 Rules:
-- Only create a skill if the task pattern is likely to be reused.
-- Skill names must be snake_case.
-- The code field should contain REAL, WORKING Python code based on what was actually executed.
-- If the task is too specific or one-off, set should_create to false."""
+- ALWAYS prefer "update" over "create" when an existing skill has overlapping functionality.
+- Only use "create" when the task pattern is reusable AND no existing skill is even remotely related.
+- Skill names must be snake_case and GENERAL (e.g. "web_to_markdown" not "convert_wechat_article_to_markdown").
+- The code field must contain REAL, WORKING Python code based on what was actually executed.
+- If the task is too specific or one-off, use "skip"."""
 
 
 class SkillBuilder:
@@ -46,7 +55,8 @@ class SkillBuilder:
             Output.system("任务未成功，跳过技能评估")
             return None
 
-        prompt = self._build_prompt(objective, execution_result)
+        existing_skills = self.vault.load_skills()
+        prompt = self._build_prompt(objective, execution_result, existing_skills)
 
         Output.system("正在调用 LLM 评估是否生成新技能...")
         try:
@@ -63,37 +73,69 @@ class SkillBuilder:
             Output.warn(f"技能评估失败: {str(e)}")
             return None
 
+        action = result.get("action", "skip")
         reason = result.get("reason", "")
-        if not result.get("should_create"):
+
+        if action == "skip":
             Output.system(f"评估结果: 不需要生成新技能 ({reason})")
             return None
 
+        if action == "update":
+            return self._handle_update(result)
+
+        if action == "create":
+            return self._handle_create(result)
+
+        Output.warn(f"未知的技能评估动作: {action}")
+        return None
+
+    def _handle_update(self, result: dict) -> dict | None:
+        """Update an existing skill with improved code."""
+        target = result.get("target", "")
         skill = result.get("skill", {})
-        if not skill.get("name"):
-            Output.warn("评估结果缺少技能名称，跳过")
+        reason = result.get("reason", "")
+
+        if not target:
+            Output.warn("评估要求更新技能但未指定目标，跳过")
             return None
 
-        # Check if skill already exists
-        existing = self.vault.load_skills()
-        if skill["name"] in existing:
-            Output.system(f"技能 '{skill['name']}' 已存在，跳过")
-            return None
-
-        # Save the skill
-        Output.learning(f"正在保存新技能: {skill['name']}...")
+        Output.learning(f"正在更新已有技能: {target} ({reason})")
         self.vault.save_skill(
-            name=skill["name"],
+            name=target,
             goal=skill.get("goal", ""),
             inputs=skill.get("inputs", []),
             steps=skill.get("steps", []),
             code=skill.get("code", ""),
+            triggers=skill.get("triggers"),
         )
+        Output.learning(f"♻️ 技能已更新: {target}")
+        return {"name": target, "updated": True, **skill}
 
-        Output.learning(f"🌱 新技能已创建: {skill['name']} — {skill.get('goal', '')}")
+    def _handle_create(self, result: dict) -> dict | None:
+        """Create a brand-new skill."""
+        skill = result.get("skill", {})
+        reason = result.get("reason", "")
+        name = skill.get("name", "")
+
+        if not name:
+            Output.warn("评估结果缺少技能名称，跳过")
+            return None
+
+        Output.learning(f"正在保存新技能: {name}...")
+        self.vault.save_skill(
+            name=name,
+            goal=skill.get("goal", ""),
+            inputs=skill.get("inputs", []),
+            steps=skill.get("steps", []),
+            code=skill.get("code", ""),
+            triggers=skill.get("triggers"),
+        )
+        Output.learning(f"🌱 新技能已创建: {name} — {skill.get('goal', '')}")
         return skill
 
-    def _build_prompt(self, objective: dict, execution_result: dict) -> str:
-        """Build skill evaluation prompt."""
+    def _build_prompt(self, objective: dict, execution_result: dict,
+                      existing_skills: str) -> str:
+        """Build skill evaluation prompt including existing skills for dedup."""
         goal = objective.get("goal", "Unknown")
         steps = execution_result.get("steps", [])
 
@@ -101,9 +143,19 @@ class SkillBuilder:
         for s in steps:
             step_details.append(f"  {s.get('action')}({s.get('description', '')})")
 
-        return (
-            f"Task completed successfully.\n\n"
-            f"Goal: {goal}\n"
-            f"Steps executed:\n" + "\n".join(step_details) + "\n\n"
-            f"Should this task become a reusable skill?"
+        parts = [
+            f"Task completed successfully.\n",
+            f"Goal: {goal}",
+            f"Steps executed:\n" + "\n".join(step_details),
+        ]
+
+        if existing_skills:
+            parts.append(f"\n--- Existing Skills (check for overlap!) ---\n{existing_skills}")
+        else:
+            parts.append("\n--- No existing skills yet ---")
+
+        parts.append(
+            "\nDecide: skip, update an existing skill, or create a new one? "
+            "PREFER updating if any existing skill is related."
         )
+        return "\n".join(parts)

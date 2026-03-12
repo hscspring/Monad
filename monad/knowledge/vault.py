@@ -5,10 +5,13 @@ The file system IS the database.
 """
 
 import os
+import json
 import yaml
 from datetime import datetime
 from pathlib import Path
 from monad.config import CONFIG
+
+PROMOTE_THRESHOLD = 3
 
 
 class KnowledgeVault:
@@ -100,11 +103,15 @@ class KnowledgeVault:
         return "\n\n".join(skills)
 
     def load_experiences(self, query: str = "") -> str:
-        """Load relevant experiences by tag matching, filtering out failed ones.
+        """Load relevant experiences scored by relevance + recency.
 
-        Uses keyword overlap between the user query and experience tags
-        to select relevant past experiences. Always includes the most
-        recent few as fallback context.
+        Scoring formula per entry:
+          relevance  = number of overlapping keywords (direct + substring)
+          recency    = position bonus (newer entries = higher index = more bonus)
+          score      = relevance * 2 + recency
+
+        Always includes the most recent RECENT_FALLBACK entries regardless of
+        relevance. Failed experiences are excluded.
 
         Args:
             query: Current user request, used for relevance matching.
@@ -116,7 +123,6 @@ class KnowledgeVault:
         text = filepath.read_text(encoding="utf-8")
         blocks = text.split("\n---\n")
 
-        # Parse all successful blocks with their tags + title keywords
         entries = []  # (block_text, keywords_set)
         for block in blocks:
             stripped = block.strip()
@@ -125,14 +131,12 @@ class KnowledgeVault:
             keywords = set()
             for line in stripped.split("\n"):
                 line_s = line.strip()
-                # Extract from Tags line
                 if line_s.lower().startswith("tags:") or line_s.startswith("5."):
                     raw = line_s.split(":", 1)[-1] if ":" in line_s else line_s
                     for token in raw.replace("#", " ").replace("，", " ").replace(",", " ").split():
                         token = token.strip().lower()
                         if len(token) >= 2:
                             keywords.add(token)
-                # Extract from title line (e.g. "### 历史任务: 分析 kexue.fm [SUCCESS]")
                 elif line_s.startswith("### 历史任务:"):
                     title = line_s.split(":", 1)[-1]
                     title = title.replace("[SUCCESS]", "").replace("[FAILED]", "").strip()
@@ -148,7 +152,6 @@ class KnowledgeVault:
         MAX_EXPERIENCES = 10
         RECENT_FALLBACK = 3
 
-        # Tokenize query for matching
         query_tokens = set()
         if query:
             for t in query.lower().replace(",", " ").replace("，", " ").split():
@@ -156,32 +159,30 @@ class KnowledgeVault:
                 if len(t) >= 2:
                     query_tokens.add(t)
 
-        # Score each entry: keyword overlap + substring match
-        matched = []
+        total = len(entries)
+        scored = []  # (index, score)
         for i, (block_text, keywords) in enumerate(entries):
-            if not query_tokens or not keywords:
-                continue
-            overlap = query_tokens & keywords
-            if not overlap:
-                for qt in query_tokens:
-                    for kw in keywords:
-                        if qt in kw or kw in qt:
-                            overlap = {qt}
-                            break
-                    if overlap:
-                        break
-            if overlap:
-                matched.append(i)
+            relevance = 0
+            if query_tokens and keywords:
+                relevance = len(query_tokens & keywords)
+                if relevance == 0:
+                    for qt in query_tokens:
+                        for kw in keywords:
+                            if qt in kw or kw in qt:
+                                relevance += 1
+                                break
+            recency = (i + 1) / total  # 0→1, newest = 1
+            score = relevance * 2 + recency
+            scored.append((i, score))
 
-        # Always include the most recent N as fallback
-        recent_indices = set(range(max(0, len(entries) - RECENT_FALLBACK), len(entries)))
+        scored.sort(key=lambda x: x[1], reverse=True)
+        top_indices = {idx for idx, _ in scored[:MAX_EXPERIENCES - RECENT_FALLBACK]}
 
-        # Combine: matched + recent, deduplicated, capped
-        selected_indices = sorted(set(matched) | recent_indices)
-        selected_indices = selected_indices[-MAX_EXPERIENCES:]
+        recent_indices = set(range(max(0, total - RECENT_FALLBACK), total))
 
-        result = [entries[i][0] for i in selected_indices]
-        return "\n\n---\n\n".join(result)
+        selected = sorted(top_indices | recent_indices)[-MAX_EXPERIENCES:]
+
+        return "\n\n---\n\n".join(entries[i][0] for i in selected)
 
     def load_all_context(self, query: str = "") -> dict:
         """Load all knowledge needed for Planner reasoning.
@@ -226,25 +227,93 @@ class KnowledgeVault:
 
     def save_experience(self, query: str, reflection: str, success: bool = True,
                         tags: list = None) -> Path:
-        """Save a concise experience (Query + Reflection) for future context.
+        """Save experience to pending buffer; auto-promote when pattern recurs.
 
-        Args:
-            query: The original user request
-            reflection: LLM-generated reflection summary
-            success: Whether the task succeeded. Failed experiences are
-                     tagged [FAILED] and excluded from future reasoning
-                     context to prevent experience pollution.
-            tags: Keywords for relevance matching on future loads.
+        New experiences land in pending.jsonl first. When the same tag pattern
+        appears ≥ PROMOTE_THRESHOLD times, the latest entry is promoted to
+        accumulated_experiences.md and the pending cluster is cleared.
+
+        Failed experiences are stored with success=False and never promoted,
+        preventing experience pollution.
         """
-        filepath = self.config.experiences_path / "accumulated_experiences.md"
-        status_tag = "[SUCCESS]" if success else "[FAILED]"
+        pending_path = self.config.experiences_path / "pending.jsonl"
+        promoted_path = self.config.experiences_path / "accumulated_experiences.md"
+
+        entry = {
+            "task": query,
+            "summary": reflection,
+            "tags": tags or [],
+            "success": success,
+            "ts": datetime.now().isoformat(),
+        }
+
+        with open(pending_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+        if not success:
+            return pending_path
+
+        promoted = self._try_promote(entry, pending_path, promoted_path)
+        return promoted_path if promoted else pending_path
+
+    def _try_promote(self, new_entry: dict, pending_path: Path, promoted_path: Path) -> bool:
+        """Check if the new entry's tag cluster reaches promotion threshold."""
+        new_tags = set(new_entry.get("tags", []))
+        if not new_tags:
+            return False
+
+        pending = self._read_pending(pending_path)
+        similar = [e for e in pending if e.get("success") and
+                   new_tags & set(e.get("tags", []))]
+
+        if len(similar) < PROMOTE_THRESHOLD:
+            return False
+
+        best = similar[-1]
+        status_tag = "[SUCCESS]"
         tag_line = ""
-        if tags:
-            tag_line = f"\nTags: {' '.join('#' + t for t in tags)}\n"
-        content = f"### 历史任务: {query} {status_tag}\n{reflection}{tag_line}\n\n---\n\n"
-        with open(filepath, "a", encoding="utf-8") as f:
+        if best.get("tags"):
+            tag_line = f"\nTags: {' '.join('#' + t for t in best['tags'])}\n"
+        date_line = f"Date: {datetime.now().strftime('%Y-%m-%d')}\n"
+        content = f"### 历史任务: {best['task']} {status_tag}\n{date_line}{best['summary']}{tag_line}\n\n---\n\n"
+        with open(promoted_path, "a", encoding="utf-8") as f:
             f.write(content)
-        return filepath
+
+        self._purge_cluster(new_tags, pending_path)
+        return True
+
+    @staticmethod
+    def _read_pending(path: Path) -> list:
+        if not path.exists():
+            return []
+        entries = []
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line:
+                try:
+                    entries.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+        return entries
+
+    @staticmethod
+    def _purge_cluster(tags: set, pending_path: Path):
+        """Remove entries whose tags overlap with the promoted cluster."""
+        remaining = []
+        for line in pending_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                remaining.append(line)
+                continue
+            if tags & set(entry.get("tags", [])):
+                continue
+            remaining.append(line)
+        pending_path.write_text("\n".join(remaining) + "\n" if remaining else "",
+                                encoding="utf-8")
 
     def save_skill(self, name: str, goal: str, inputs: list, steps: list,
                    code: str = "", triggers: list = None) -> Path:

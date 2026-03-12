@@ -9,6 +9,7 @@ This is the brain of MONAD. Every step is printed so the user can see the proces
 """
 
 import json
+import os
 import re
 from monad.core.llm import llm_call
 from monad.knowledge.vault import KnowledgeVault
@@ -54,7 +55,8 @@ REASONER_SYSTEM = """You are MONAD, a rational autonomous agent.
    - 安装缺失的库（subprocess: pip install）
    - 做任何 Python 能做的事
    - 对 web_fetch 返回的数据做进一步处理
-   - 当用户要求生成文件/报告时，保存到 `MONAD_OUTPUT_DIR` 变量指定的路径（已预置），系统会自动生成下载链接
+   - 当用户要求生成文件/报告时，保存到 `~/.monad/output/` 目录下（代码中可直接使用已注入的变量 `MONAD_OUTPUT_DIR`，它的值就是该目录的绝对路径），系统会自动生成下载链接
+   - 示例：`path = os.path.join(MONAD_OUTPUT_DIR, "report.md")`  ← MONAD_OUTPUT_DIR 是变量，不是字符串！
    - 一般的回答直接用 answer 返回即可，只有用户明确要求"生成文件/报告/导出"时才保存文件
 
 2. **shell**: 执行 Shell 命令。你的"口令"🗣️。
@@ -111,6 +113,16 @@ REASONER_SYSTEM = """You are MONAD, a rational autonomous agent.
 ## 主动学习技能（Skill Creation）
 
 当用户要求你"学习一个新技能"时，你**必须按顺序执行以下 action**（每一步都是一个独立的 action，不能跳过）：
+
+**Step 0（最重要）** — 先检查已有技能，复用优先：
+仔细阅读上方 "Your Learned Skills" 列表中每个技能的 Goal 和 Triggers。
+- 如果某个已有技能**已经覆盖**当前需求 → 直接使用它，不要创建新的
+- 如果某个已有技能**功能相近**但不完全匹配（例如 web_to_markdown 已存在，用户要求"学习把微信文章转markdown"）→ **修改已有技能的 executor.py 使其兼容**，不要新建
+- 只有**完全没有相关技能**时，才继续 Step 1~4 创建新的
+
+修改已有技能示例：
+{"type": "action", "capability": "python_exec", "params": {"code": "# 读取已有技能代码\nwith open(os.path.expanduser('~/.monad/knowledge/skills/已有技能名/executor.py')) as f:\n    print(f.read())"}}
+然后修改代码使其兼容新场景，写回同一个文件。
 
 **Step 1** — shell 安装依赖：
 {"type": "action", "capability": "shell", "params": {"command": "pip install 库名"}}
@@ -336,12 +348,32 @@ class Reasoner:
                 # Show observation
                 Output.observation(result[:500] if len(result) > 500 else result)
 
+                # Post-action verification for skill/file creation
+                verification = self._verify_action(capability, params, result)
+                if verification:
+                    result = result + "\n" + verification
+                    Output.observation(f"[验证] {verification}")
+
                 # Feed back to LLM
                 observation = f"Observation from {capability}:\n{result}"
                 history.append({"role": "user", "content": observation})
 
             # ── Handle: ANSWER ───────────────────────────────
             elif parsed["type"] == "answer":
+                # Guard: reject hollow answers that claim creation
+                # without actual write actions
+                if self._is_hollow_answer(user_input, actions):
+                    Output.warn("检测到空洞回答：声称完成创建但未实际执行写入操作，强制要求执行")
+                    history.append({"role": "assistant", "content": raw_response})
+                    history.append({"role": "user", "content":
+                        "[SYSTEM] Your answer claims you created/installed/saved something, "
+                        "but you did NOT execute any python_exec or shell action that writes files. "
+                        "Checking if files exist is NOT creating them. "
+                        "You MUST actually execute code to create the files. "
+                        "Do NOT answer again until you have performed the write actions."
+                    })
+                    continue
+
                 Output.phase("任务完成")
                 return {
                     "answer": parsed["content"],
@@ -415,6 +447,63 @@ class Reasoner:
         sections.append(f"## User Request\n{user_input}")
 
         return "\n\n".join(sections)
+
+    @staticmethod
+    def _verify_action(capability: str, params: dict, result: str) -> str:
+        """Verify file-creation actions actually produced the expected artifacts."""
+        if capability not in ("python_exec", "shell"):
+            return ""
+
+        code = params.get("code", "") + params.get("command", "")
+
+        skills_dir = os.path.expanduser("~/.monad/knowledge/skills/")
+        if skills_dir not in code and "/skills/" not in code:
+            return ""
+
+        match = re.search(r'skills/([a-zA-Z0-9_-]+)', code)
+        if not match:
+            return ""
+        skill_name = match.group(1)
+        skill_path = os.path.join(skills_dir, skill_name)
+        yaml_ok = os.path.isfile(os.path.join(skill_path, "skill.yaml"))
+        py_ok = os.path.isfile(os.path.join(skill_path, "executor.py"))
+        parts = []
+        if yaml_ok and py_ok:
+            parts.append(f"✅ Verified: skill '{skill_name}' — skill.yaml and executor.py exist")
+        else:
+            if not yaml_ok:
+                parts.append(f"⚠️ skill.yaml NOT found at {skill_path}/skill.yaml")
+            if not py_ok:
+                parts.append(f"⚠️ executor.py NOT found at {skill_path}/executor.py")
+        return " | ".join(parts)
+
+    @staticmethod
+    def _is_hollow_answer(user_input: str, actions: list) -> bool:
+        """Detect answers that claim creation without actual write actions.
+
+        Returns True when the user's request implies creating/saving something
+        but the action history contains no python_exec or shell write commands.
+        """
+        creation_keywords = ["创建", "生成", "保存", "安装", "学习", "制作",
+                             "写入", "install", "create", "save", "build"]
+        task_lower = user_input.lower()
+        if not any(kw in task_lower for kw in creation_keywords):
+            return False
+
+        write_indicators = ["open(", "write(", "makedirs", "mkdir",
+                            "pip install", "save_", "> ", ">>",
+                            "with open", "write_text"]
+        for action in actions:
+            cap = action.get("capability", "")
+            if cap not in ("python_exec", "shell"):
+                continue
+            code = action.get("params", {}).get("code", "")
+            cmd = action.get("params", {}).get("command", "")
+            payload = code + cmd
+            if any(w in payload for w in write_indicators):
+                return False
+
+        return True
 
     @staticmethod
     def _thought_similarity(a: str, b: str) -> float:
