@@ -14,7 +14,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Search First Principle**: When stuck (errors, missing packages), MONAD uses `web_fetch` to search for solutions, never guesses. Only asks user when the query itself is unclear.
 - **URL-First Principle**: When the user provides a specific URL, MONAD must access it directly first, not search for it. Search engines are a fallback.
 - **LLM as Command Executor**: LLM training data is disregarded. All factual information must be retrieved from real world via code execution or web perception.
-- **Experience Hygiene**: Failed experiences are tagged `[FAILED]` and excluded from reasoning context to prevent experience pollution.
+- **Experience Staging & Hygiene**: New experiences land in `pending.jsonl` first. Only when the same tag pattern recurs ≥3 times is the best example promoted to `accumulated_experiences.md`. Failed experiences are tagged `[FAILED]` and never promoted.
+- **Tag-Based Experience Retrieval**: Experiences scored by `relevance × 2 + recency` (keyword overlap + timestamp). Top entries selected plus 3 most recent as fallback. No vector DB.
+- **Anti-Hallucination Verification**: Post-action verification checks filesystem after skill creation actions. Hollow answer guard rejects answers claiming creation without actual write actions.
+- **Skill Deduplication (Reuse First)**: System prompt instructs LLM to check existing skills before creating new ones. SkillBuilder supports `skip`/`update`/`create` actions, preferring `update`.
 
 ### Basic Capabilities (4 "Instincts")
 
@@ -70,7 +73,7 @@ APP_ID=xxx APP_SECRET=yyy monad --feishu
 ```
 monad/
 ├── cognition/          # Reasoning engine
-│   └── reasoner.py     # Multi-turn ReAct loop (max 15 turns)
+│   └── reasoner.py     # Multi-turn ReAct loop (max 30 turns)
 ├── core/
 │   ├── loop.py         # Main orchestration: Input → Reason → Reflect
 │   └── llm.py          # LLM API wrapper
@@ -99,11 +102,13 @@ knowledge/
 ├── axioms/             # System behavioral principles (rationality.md)
 ├── environment/        # World knowledge (internet.md)
 ├── user/               # User context (facts.md, mood.md, goals.md)
-├── skills/             # Auto-generated reusable skills
+├── skills/             # Reusable skills (built-in + auto-generated)
 │   └── <skill_name>/
-│       ├── skill.yaml  # Metadata: name, goal, inputs, steps
-│       └── executor.py # Python implementation
-├── experiences/        # Post-task reflections
+│       ├── skill.yaml  # Metadata: name, goal, inputs, steps, triggers
+│       └── executor.py # Python implementation with run(**kwargs)
+├── experiences/        # Two-tier experience memory
+│   ├── pending.jsonl            # Short-term staging area
+│   └── accumulated_experiences.md  # Long-term promoted experiences
 ├── protocols/          # Error handling protocols
 ├── tools/              # Documentation for 4 basic capabilities
 ├── records/            # Full execution logs per task
@@ -114,25 +119,28 @@ knowledge/
 
 ### Reasoner (cognition/reasoner.py)
 
-- Multi-turn ReAct reasoning with max 15 turns
+- Multi-turn ReAct reasoning with max 30 turns
 - LLM responds with JSON in 3 types:
   - `{"type": "thought", "content": "reasoning"}` - Internal reasoning
   - `{"type": "action", "capability": "python_exec", "params": {...}}` - Execute capability
   - `{"type": "answer", "content": "final answer"}` - Task completion
 - Handles malformed JSON, truncated responses, XML tag leakage from certain models
-- System prompt enforces "Search First" principle and rationality rules
+- System prompt enforces "Search First" principle, "Reuse First" for skills, and rationality rules
+- Post-action verification: checks skill files exist after creation actions
+- Hollow answer guard: rejects answers claiming creation without write actions
 
 ### Executor (execution/executor.py)
 
 - Executes 4 basic capabilities
-- Dynamically loads learned skills from `knowledge/skills/` by importing `executor.py`
-- Skills registered via YAML metadata + Python implementation
+- Loads skills exclusively from `~/.monad/knowledge/skills/` (via `CONFIG.skills_path`)
+- Injects MONAD's 4 tool functions (`web_fetch`, `shell`, `python_exec`, `ask_user`) into skill modules at load time
+- `python_exec` pre-injects `os`, `sys`, `web_fetch`, `shell`, `MONAD_OUTPUT_DIR` into execution namespace
 
 ### Learning Pipeline
 
-1. **Reflection** (`learning/reflection.py`): Summarizes task execution into concise experience
-2. **SkillBuilder** (`learning/skill_builder.py`): Evaluates if task should become reusable skill
-3. **Vault** (`knowledge/vault.py`): Persists experiences and skills to markdown/YAML
+1. **Reflection** (`learning/reflection.py`): Summarizes task execution with tags into concise experience
+2. **SkillBuilder** (`learning/skill_builder.py`): Evaluates existing skills first; supports `skip`/`update`/`create` actions
+3. **Vault** (`knowledge/vault.py`): Two-tier experience storage (pending → promote); tag-based retrieval with relevance+recency scoring
 
 ### Stateless Message Management
 
@@ -164,7 +172,7 @@ All knowledge files are markdown. Use `KnowledgeVault` methods:
 - `vault.load_skills()` - Load available skills
 - `vault.load_all_context()` - Load everything for reasoning
 - `vault.save_skill(name, goal, inputs, steps, code)` - Save new skill
-- `vault.save_experience(query, reflection)` - Save task reflection
+- `vault.save_experience(query, reflection, success, tags)` - Save task reflection (stages to pending.jsonl, auto-promotes)
 
 ### LLM Communication
 
@@ -185,13 +193,14 @@ pytest tests/test_web_fetch.py::TestWebFetchAutoMode::test_auto_simple_page -v
 ### Debugging Reasoner Issues
 - Check `monad/cognition/reasoner.py` system prompt
 - Review JSON parsing in `_parse_response()`
-- Examine turn limit (MAX_TURNS = 15)
+- Examine turn limit (MAX_TURNS = 30)
 
 ### Adding Knowledge
-Edit files in `~/.monad/knowledge/` or bundled `monad/knowledge/`:
+Edit files in `~/.monad/knowledge/` (primary) or bundled `monad/knowledge/` (synced incrementally on startup — new files only, never overwrites user changes):
 - `axioms/` - Core behavioral principles
 - `environment/` - World facts (URLs, APIs)
 - `protocols/` - Error handling strategies
+- `skills/` - Reusable skills (built-in: web_to_markdown, parse_document, fetch_topic_news)
 
 ### Feishu Integration
 Requires optional dependency: `pip install monad-core[feishu]`

@@ -35,7 +35,10 @@ Instead, it **autonomously learns** how to complete your tasks by writing and ex
 *   **Stateless Message Management:** Every user request starts with a fresh, clean message context. MONAD doesn't rely on LLM Chat History; instead, it persists vital information via reflection loops. This ensures reasoning purity and prevents hallucination buildup from long conversations.
 *   **Search First, Ask Later:** When stuck during execution (errors, missing packages, unfamiliar tools), MONAD's first instinct is to search the web via `web_fetch`, never to guess. But if the user's intent is unclear, MONAD asks the user first. In short: **unclear query → ask user; execution problem → search first**.
 *   **URL-First Principle:** When the user provides a specific URL or domain (e.g., *"Analyze kexue.fm"*), MONAD must directly access that URL first, not detour through a search engine. Search engines are a fallback, not the default when a target is already known.
-*   **Experience Hygiene:** After each task, MONAD reflects and saves experiences. However, failed experiences are tagged `[FAILED]` and excluded from future reasoning context—preventing "experience pollution" where wrong conclusions from past failures mislead future tasks.
+*   **Experience Staging & Hygiene:** Experiences don't go directly into long-term memory. New experiences first land in a staging area (`pending.jsonl`). Only when the same tag pattern recurs **≥3 times** is the best example promoted to the permanent experience file — a frequency-based deduplication inspired by how humans consolidate short-term memory into long-term memory. Failed experiences are tagged `[FAILED]` and never promoted, preventing "experience pollution."
+*   **Tag-Based Experience Retrieval:** Experiences are tagged during reflection. At reasoning time, MONAD scores each experience by `relevance × 2 + recency` (not semantic embeddings, just keyword overlap + timestamp), picks the top entries, and always includes the 3 most recent as fallback. Simple, fast, zero infrastructure.
+*   **Anti-Hallucination Verification:** LLMs sometimes claim "I created the skill" without actually writing any files. MONAD defends against this at two levels: (1) **Post-Action Verification** — after actions that should create files, the system checks the filesystem and appends verification results to the LLM's observation; (2) **Hollow Answer Guard** — if the LLM tries to deliver a final answer claiming creation/saving but never executed a write action, the answer is rejected and the LLM is forced to actually do the work.
+*   **Skill Deduplication (Reuse First):** Before creating a new skill, the system prompts the LLM to check existing skills and prefer modifying them. The SkillBuilder module independently evaluates all existing skills and supports three actions: `skip`, `update` (preferred), or `create` — preventing the skill library from growing duplicate entries.
 
 ---
 
@@ -64,8 +67,13 @@ knowledge/
 │   ├── facts.md     #   Objective facts & preferences (e.g., prefers Python)
 │   ├── mood.md      #   Current state & mood
 │   └── goals.md     #   Long-term goals & ongoing projects
-├── skills/          # Auto-generated reusable Python skills
-├── experiences/     # Execution logs and post-task reflections
+├── skills/          # Reusable Python skills (built-in + auto-generated)
+│   └── <skill>/
+│       ├── skill.yaml   # Metadata: name, goal, inputs, steps, triggers
+│       └── executor.py  # Python implementation with run(**kwargs)
+├── experiences/     # Two-tier experience memory
+│   ├── pending.jsonl            # Short-term: all recent experiences (staging area)
+│   └── accumulated_experiences.md  # Long-term: promoted high-frequency patterns
 ├── protocols/       # Error handling protocols
 └── tools/           # Documentation for the 4 basic capabilities
 ```
@@ -79,8 +87,8 @@ When you give MONAD an objective (e.g., *"What is the weather in Hangzhou today?
 1.  **Analyze & Self-Check:** Understand intent and check the local knowledge base for existing skills.
 2.  **Learn & Research (The "Search First" Principle):** If the task is unknown or an error occurs, MONAD uses `web_fetch` to research documentation, API usage, or solutions. This is the "Learning" phase where it acquires the "how-to" knowledge before acting.
 3.  **Execute & Observe:** MONAD writes and executes Python code or shell commands via `python_exec`. It treats the output as "Observations" to verify success or identify new obstacles.
-4.  **Reflect & Persist:** After a successful execution, the `Reflection` module summarizes the experience. The `SkillBuilder` then evaluates if the logic should be abstracted into a permanent, reusable `skill`.
-5.  **Answer:** Provide the final answer based on real-world data verified through execution.
+4.  **Reflect & Persist:** After a successful execution, the `Reflection` module summarizes the experience with tags. The `SkillBuilder` evaluates if the logic should be abstracted into a permanent skill — checking existing skills first to avoid duplication.
+5.  **Verify & Answer:** Before delivering the final answer, the system verifies that claimed actions actually happened (files exist, skills were written). The answer is based on real-world data verified through execution.
 
 ### 💡 Deep Dive: Why Stateless?
 
