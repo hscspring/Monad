@@ -111,6 +111,13 @@ class MonadConfig:
     def cache_path(self) -> Path:
         return self.knowledge_path / "cache"
 
+    @property
+    def browser_path(self) -> Path:
+        return self.root_dir / "browser"
+
 
 # Global config instance
 CONFIG = MonadConfig()
+
+# Ensure browser state directory exists
+CONFIG.browser_path.mkdir(parents=True, exist_ok=True)

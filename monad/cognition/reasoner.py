@@ -20,6 +20,9 @@ from monad.interface.output import Output
 _THOUGHT_SOFT_LIMIT = 2
 _THOUGHT_HARD_LIMIT = 4
 
+# Max consecutive ask_user before forcing LLM to proceed without user input
+_ASK_USER_LIMIT = 2
+
 # Jaccard word-overlap threshold to consider two thoughts "the same"
 _SIMILARITY_THRESHOLD = 0.6
 
@@ -233,6 +236,7 @@ class Reasoner:
         thoughts = []
         actions = []
         consecutive_thoughts = 0
+        consecutive_ask_user = 0
 
         for turn in range(MAX_TURNS):
             Output.phase(f"Reasoning Turn {turn + 1}/{MAX_TURNS}")
@@ -314,6 +318,22 @@ class Reasoner:
             if parsed["type"] == "action":
                 capability = parsed.get("capability", "")
                 params = parsed.get("params", {})
+
+                # Guard: prevent ask_user loop
+                if capability == "ask_user":
+                    consecutive_ask_user += 1
+                    if consecutive_ask_user > _ASK_USER_LIMIT:
+                        Output.warn(f"连续 ask_user {consecutive_ask_user} 次，强制跳过并继续执行")
+                        history.append({"role": "assistant", "content": raw_response})
+                        history.append({"role": "user", "content":
+                            "User did not respond. Do NOT ask again. "
+                            "Proceed with reasonable defaults or use the information you already have. "
+                            "If images are needed, skip them or generate a text-only version."
+                        })
+                        continue
+                else:
+                    consecutive_ask_user = 0
+
                 actions.append({"capability": capability, "params": params})
                 history.append({"role": "assistant", "content": raw_response})
 
@@ -537,6 +557,16 @@ class Reasoner:
     def _normalize_parsed(self, parsed: dict) -> dict | None:
         """Normalize alternative JSON formats into the standard format."""
         if "type" in parsed:
+            ptype = parsed["type"]
+            # LLM sometimes returns {"type": "ask_user", "content": "..."}
+            # instead of the correct action format — fix it here
+            if ptype == "ask_user":
+                question = parsed.get("content", "") or parsed.get("question", "")
+                return {
+                    "type": "action",
+                    "capability": "ask_user",
+                    "params": {"question": question},
+                }
             return parsed
         # Handle {"action": "ask_user", "params": {...}} format
         if "action" in parsed:
@@ -634,7 +664,20 @@ class Reasoner:
                     except json.JSONDecodeError:
                         continue
 
-        # Strategy 4: Extract thought from plain text response
+        # Strategy 4: Handle [TOOL_CALL] format (Minimax model leakage)
+        # e.g. [TOOL_CALL] {tool => "ask_user", args => { --question "..." }}
+        tool_call_match = re.search(r'\[TOOL_CALL\].*?tool\s*=>\s*"(\w+)"', cleaned)
+        if tool_call_match:
+            tool_name = tool_call_match.group(1)
+            # Extract question/content from args if present
+            arg_match = re.search(r'--question\s+"([^"]*)', cleaned)
+            arg_val = arg_match.group(1) if arg_match else ""
+            if tool_name == "ask_user":
+                return {"type": "action", "capability": "ask_user",
+                        "params": {"question": arg_val}}
+            return {"type": "action", "capability": tool_name, "params": {}}
+
+        # Strategy 5: Extract thought from plain text response
         # If the model outputs plain text, treat it as a thought
         if len(cleaned) > 10 and '{' not in cleaned:
             return {"type": "thought", "content": cleaned[:500]}
