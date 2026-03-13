@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.2] - 2026-03-13
+
+### Added
+- **Skill: publish_to_xhs**: Automated Xiaohongshu note publishing via Playwright browser automation.
+  - Persistent browser profile (`~/.monad/browser/xhs_profile/`) — login once, session persists across runs.
+  - Two publishing modes: upload user images or auto-generate text cards via "文字配图".
+  - LLM-powered card text: condenses article content into 3-5 concise sentences for visually clean text cards.
+  - Auto-generates knowledge map via `doc2mermaid` and attaches as extra slide image.
+  - Topic hashtags added through `#keyword` dropdown selection (matching XHS native UI).
+  - `source_url` parameter appends original article link to note body.
+- **Skill: doc_to_knowledge_map**: Convert documents/URLs into visual knowledge maps (SVG/PNG) using `doc2mermaid`. Accepts text, URL (auto-fetched), or file path input. Uses MONAD's LLM config.
+
+### Fixed
+- **Reasoner ask_user Loop**: Normalized `{"type": "ask_user"}` responses to standard action format. Added consecutive ask_user limit (2) to prevent infinite loops where the LLM keeps requesting user input without progress.
+- **Reasoner [TOOL_CALL] Parsing**: Handle `[TOOL_CALL] {tool => "...", args => {...}}` format leaked by Minimax models, converting it to standard action JSON.
+
 ## [0.3.1] - 2026-03-12
 
 ### Added
