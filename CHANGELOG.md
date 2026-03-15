@@ -5,7 +5,15 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
-- **Skill: record_screen**: New built-in skill for background screen recording as mp4. Supports `start` / `stop` / `status` actions. Uses `ffmpeg avfoundation` (macOS), records at 30fps with h264+aac, non-blocking (doesn't interrupt other tasks). State persisted to `~/.monad/cache/record_screen.json` between calls. 10 unit tests added.
+- **Skill: start_recording**: Start background screen recording as MKV via ffmpeg AVFoundation. Non-blocking. State persisted to `~/.monad/cache/recording_state.json`.
+- **Skill: stop_recording**: Stop recording (SIGTERM), transcode MKV → MP4 via a fresh ffmpeg process (guarantees valid moov atom and browser-playable file), return file path + `http://localhost:8000/output/` download link.
+- **Skill: markdown_to_knowledge_map**: Renamed from `doc_to_knowledge_map`; accepts Markdown/text/URL/file as input.
+- **reasoner: "发送给 XXX" hint**: When a screenshot shows a Feishu/WeChat search result card with "发送给 XXX", the action hint now explicitly tells the LLM to click it to enter the chat, then type the message.
+- **system prompt: 搜索面板 "发送给" 说明**: Added guidance that after cmd+k search, clicking a contact shows a "发送给 XXX" card — must click it to enter chat.
+
+### Changed
+- **record_screen skill removed**: Replaced by `start_recording` + `stop_recording` (two atomic skills). The single-skill design had an irrecoverable cross-process stdin issue that caused all recorded MP4s to have missing moov atoms (unplayable).
+- **doc_to_knowledge_map renamed** to `markdown_to_knowledge_map` to reflect that its primary input is Markdown/text and to align with the future skill pipeline design.
 
 ## [0.4.0] - 2026-03-15
 

@@ -110,6 +110,7 @@ REASONER_SYSTEM = _PLATFORM_INFO + """You are MONAD, a rational autonomous agent
      - **同名元素有多个位置**：UI 中同一文字可能出现在多个位置（导航栏、侧边栏、搜索分类等）。当 click 返回 "Also matched" 或 "WARNING: N elements match"，仔细看坐标，用 `click_xy <x> <y>` 精确点击你真正想要的那个。
      - **发消息必须完成全流程**：找到联系人 → 点击进入聊天 → `type <消息内容>` 输入文字 → 发送（Enter 或点击发送按钮）。缺少 `type` 步骤 = 消息没发出去。
      - **聊天可能已经打开**：如果 screenshot 显示联系人名字出现在窗口顶部（y 坐标很小），这是聊天窗口的标题栏——说明**这个聊天已经打开了**。不需要再搜索或点击联系人，直接 `type <消息>` 输入消息然后 `hotkey return` 发送即可。反复点击标题栏上的名字不会有任何效果。
+     - **"发送给 XXX" 面板**：在飞书/微信 cmd+k 搜索后，点击联系人名字会弹出一个结果卡片，里面有一个"发送给 XXX"按钮。**必须点击这个按钮**才能进入聊天窗口。进入聊天后再 `type <消息>` 输入并 `hotkey return` 发送。不要在这一步做其他操作。
 
 你还有已学会的技能（skills），优先使用已有技能。
 
@@ -653,6 +654,16 @@ class Reasoner:
                     "to see UI elements, then click/type to interact.]"
                 )
             if action == "screenshot" and "UI elements" in result:
+                # Detect "发送给 XXX" pattern — this is a Feishu/WeChat search result card.
+                # The correct action is to click it to open the chat, then type the message.
+                send_to_match = _re.search(r'["\']发送给\s*(\S+?)["\']', result)
+                if send_to_match:
+                    contact = send_to_match.group(1)
+                    return (
+                        f'[Hint: Search result shows "发送给{contact}" button. '
+                        f'Click it to open the chat: click 发送给{contact} '
+                        f'— then immediately type your message and press hotkey return to send.]'
+                    )
                 hint = (
                     "[Hint: You can now see the screen. Use click <text> to click a button, "
                     "type <text> to enter text, or hotkey to press keys. "
@@ -671,6 +682,15 @@ class Reasoner:
                     "was a search input (not a result), the UI won't change. Check the 'Also matched' "
                     "alternatives and try clicking one with more context text (e.g. a search result item).]"
                 )
+            if action.startswith("click") and "发送给" in result:
+                send_to_match = _re.search(r'["\']发送给\s*(\S+?)["\']', result)
+                if send_to_match:
+                    contact = send_to_match.group(1)
+                    return (
+                        f'[Hint: Click succeeded and "发送给{contact}" is visible. '
+                        f'This is the search result card. Click it: click 发送给{contact} '
+                        f'— then type your message and hotkey return to send.]'
+                    )
         return ""
 
     @staticmethod

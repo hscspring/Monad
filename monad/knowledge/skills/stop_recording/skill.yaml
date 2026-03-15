@@ -1,0 +1,12 @@
+name: stop_recording
+goal: 停止正在进行的屏幕录制，将 MKV 转码为可播放的 MP4，返回本地文件路径和 Web 下载链接
+inputs: {}
+steps:
+  - 读取 ~/.monad/cache/recording_state.json 获取 pid 和 mkv 路径
+  - 发送 SIGTERM 给 ffmpeg 进程并等待退出（MKV 无需优雅退出，强制也可播）
+  - 用 ffmpeg 将 MKV 转码为 MP4（加 -movflags +faststart 保证 moov atom 在文件头部）
+  - 删除临时 MKV 文件，清除 cache 状态
+  - 返回 MP4 路径、时长、大小，以及 http://localhost:8000/output/xxx.mp4 下载链接
+triggers:
+  - 用户说"停止录屏"、"结束录制"、"stop recording"
+  - 组合任务中所有步骤完成后的收尾步骤

@@ -1,8 +1,8 @@
 def run(**kwargs):
-    """Convert document/article/URL to a visual knowledge map (SVG/PNG).
+    """Convert Markdown text, web page URL, or local file to a visual knowledge map (SVG/PNG).
 
     Accepts three input modes (priority: text > url > file_path):
-      - text:      Raw document text
+      - text:      Markdown or plain text content
       - url:       Web page URL (auto-fetched via web_fetch)
       - file_path: Local file path (auto-read)
 
@@ -10,7 +10,7 @@ def run(**kwargs):
     Also needs: npm install -g @mermaid-js/mermaid-cli
 
     Args (via kwargs):
-        text:        Document text (optional if url or file_path provided).
+        text:        Markdown/document text (optional if url or file_path provided).
         url:         Web page URL to fetch (optional).
         file_path:   Local file to read (optional).
         output_path: Output file path (.svg or .png).

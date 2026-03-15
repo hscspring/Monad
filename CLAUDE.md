@@ -203,17 +203,17 @@ Edit files in `~/.monad/knowledge/` (primary) or bundled `monad/knowledge/` (syn
 - `axioms/` - Core behavioral principles
 - `environment/` - World facts (URLs, APIs)
 - `protocols/` - Error handling strategies
-- `skills/` - Reusable skills (built-in: web_to_markdown, parse_document, fetch_topic_news, publish_to_xhs, doc_to_knowledge_map, record_screen)
+- `skills/` - Reusable skills (built-in: web_to_markdown, parse_document, fetch_topic_news, publish_to_xhs, markdown_to_knowledge_map, start_recording, stop_recording)
 
 ### Desktop Control
 Requires optional dependency: `pip install monad-core[desktop]`
 
 ### Screen Recording
-`record_screen` skill uses `ffmpeg` (macOS: AVFoundation). Requires:
+`start_recording` / `stop_recording` skills use `ffmpeg` (macOS: AVFoundation). Requires:
 1. `brew install ffmpeg`
 2. Grant Screen Recording permission to Terminal/Python in System Settings → Privacy & Security → Screen Recording
 
-Usage: `record_screen(action="start")` / `record_screen(action="stop")` — non-blocking background process.
+`start_recording` outputs `.mkv` (safe to SIGKILL); `stop_recording` transcodes to `.mp4` via a fresh ffmpeg process, guaranteeing a valid moov atom.
 
 ### Feishu Integration
 Requires optional dependency: `pip install monad-core[feishu]`

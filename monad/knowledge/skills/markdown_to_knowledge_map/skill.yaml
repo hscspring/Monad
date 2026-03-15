@@ -1,7 +1,7 @@
-name: doc_to_knowledge_map
-goal: Convert document/article/URL into a visual knowledge map (SVG/PNG) using LLM structure extraction and Mermaid rendering
+name: markdown_to_knowledge_map
+goal: Convert Markdown text, web page URL, or local file into a visual knowledge map (SVG/PNG) using LLM structure extraction and Mermaid rendering
 inputs:
-- text (direct text content)
+- text (direct Markdown or plain text content)
 - url (web page URL, auto-fetched)
 - file_path (local file path, auto-read)
 - output_path (optional, default ~/.monad/output/knowledge_map.svg)
@@ -12,8 +12,9 @@ steps:
 - Render Mermaid to SVG or PNG via mmdc
 - Return the output file path
 triggers:
-- 用户要求将文章/文档生成知识图谱或可视化
+- 用户要求将文章/文档/Markdown 生成知识图谱或可视化
 - 用户需要文章的思维导图或流程图
 - 用户要求把文本内容转成图片或知识地图
 - 用户上传文章后要求生成配图或结构图
 - 用户给了一个 URL 并要求生成知识地图
+- 管道中上游 skill 输出了 Markdown，需要可视化

@@ -89,12 +89,13 @@ Beyond the 5 core instincts, MONAD ships with a set of ready-to-use skills:
 
 | Skill | Description |
 | :--- | :--- |
-| `record_screen` | Background screen recording to mp4 via ffmpeg. `start`/`stop`/`status` actions, non-blocking — runs alongside other tasks. |
+| `start_recording` | Start background screen recording (MKV format via ffmpeg). Non-blocking — returns immediately so other tasks can run in parallel. |
+| `stop_recording` | Stop recording, transcode MKV → MP4 (guaranteed valid moov atom), return file path + `http://localhost:8000/output/` download link. |
 | `publish_to_xhs` | Publish posts/articles to Xiaohongshu (RED). Supports text + image. |
 | `fetch_topic_news` | Fetch and summarize latest news on any topic from the web. |
 | `parse_document` | Parse and extract structured content from documents (PDF, Word, etc.). |
 | `web_to_markdown` | Convert any web page to clean Markdown. |
-| `doc_to_knowledge_map` | Transform a document into a structured knowledge graph in Markdown. |
+| `markdown_to_knowledge_map` | Convert Markdown/text/URL into a visual knowledge graph (SVG/PNG) via Mermaid. |
 
 > Skills are Python modules (`executor.py` + `skill.yaml`). MONAD can also auto-generate new skills from any successful task.
 
