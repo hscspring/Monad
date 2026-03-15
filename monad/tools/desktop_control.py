@@ -397,21 +397,17 @@ def _adjust_coords_to_screen(elements, img_path, window_bounds):
 
 
 def _capture_and_locate(target_text):
-    """Capture the frontmost window, OCR, and find the target element.
+    """Capture the full screen, OCR, and find the target element.
+
+    Uses mss full-screen capture so overlay panels (search dropdowns, popovers)
+    are always included. mss returns logical-resolution images on macOS, so OCR
+    coordinates map directly to screen logical coords usable by pynput — no scaling.
 
     Returns (target_element, alternatives_info_str) or an error string.
     The alternatives_info_str is empty when there's only one match.
     """
-    front_app = _get_frontmost_app()
-    img_path = None
-    window_bounds = None
-    if IS_MAC and front_app:
-        img_path, window_bounds = _screenshot_window(front_app)
-    if not img_path:
-        img_path = _screenshot()
+    img_path = _screenshot()
     elements = _ocr(img_path)
-    if window_bounds:
-        _adjust_coords_to_screen(elements, img_path, window_bounds)
     best, all_matches = _find_all_matches(elements, target_text)
     if best:
         alt_info = ""
@@ -481,24 +477,17 @@ def run(action: str = "", **kwargs) -> str:
             if "verified in foreground" not in activate_result and "foreground app is now" not in activate_result:
                 return activate_result
             front_app = _get_frontmost_app()
-            img_path = None
-            window_bounds = None
-            if IS_MAC and front_app:
-                img_path, window_bounds = _screenshot_window(front_app)
-            if not img_path:
-                try:
-                    img_path = _screenshot()
-                except Exception:
-                    return activate_result
+            try:
+                img_path = _screenshot()
+            except Exception:
+                return activate_result
             elements = _ocr(img_path)
             if not elements:
                 return activate_result
-            if window_bounds:
-                _adjust_coords_to_screen(elements, img_path, window_bounds)
             elements = _filter_elements(elements)
             if not elements:
                 return activate_result
-            scope = f"{front_app} window" if front_app else "full screen"
+            scope = f"{front_app} screen" if front_app else "full screen"
             lines = [activate_result,
                      f"[Auto-screenshot of {scope}] Found {len(elements)} UI elements:"]
             for e in elements:
@@ -508,20 +497,11 @@ def run(action: str = "", **kwargs) -> str:
 
         elif cmd == "screenshot":
             front_app = _get_frontmost_app()
-            scope = "full screen"
-            img_path = None
-            window_bounds = None
-            if IS_MAC and front_app:
-                img_path, window_bounds = _screenshot_window(front_app)
-                if img_path:
-                    scope = f"{front_app} window"
-            if not img_path:
-                img_path = _screenshot()
+            scope = f"{front_app} screen" if front_app else "full screen"
+            img_path = _screenshot()
             elements = _ocr(img_path)
             if not elements:
                 return f"Screen captured ({scope}) but no text elements detected."
-            if window_bounds:
-                _adjust_coords_to_screen(elements, img_path, window_bounds)
             elements = _filter_elements(elements)
             if not elements:
                 return f"Screen captured ({scope}) but all elements were filtered as noise. Try clicking or waiting."
