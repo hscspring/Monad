@@ -227,8 +227,22 @@ def _is_self_noise(text):
     return bool(_SELF_NOISE_RE.search(text))
 
 
-def _filter_elements(elements):
-    """Remove OCR noise, terminal self-output, and limit to relevant elements."""
+def _filter_elements(elements, app_bounds=None):
+    """Remove OCR noise, terminal self-output, and limit to relevant elements.
+
+    If app_bounds is provided ({left, top, width, height} in logical coords),
+    only elements within or near the app window are kept. This prevents MONAD's
+    own terminal output from leaking into the element list. A margin is added
+    to include overlay panels (search dropdowns, popovers) that extend beyond
+    the window edges.
+    """
+    MARGIN = 60  # logical pixels beyond window bounds for overlays
+    if app_bounds:
+        b_left = app_bounds["left"] - MARGIN
+        b_top = app_bounds["top"] - MARGIN
+        b_right = app_bounds["left"] + app_bounds["width"] + MARGIN
+        b_bottom = app_bounds["top"] + app_bounds["height"] + MARGIN
+
     filtered = []
     for e in elements:
         if _is_garbled(e["text"]):
@@ -237,13 +251,19 @@ def _filter_elements(elements):
             continue
         if _is_self_noise(e["text"]):
             continue
+        if app_bounds:
+            if not (b_left <= e["x"] <= b_right and b_top <= e["y"] <= b_bottom):
+                continue
         filtered.append(e)
     filtered.sort(key=lambda e: e["width"] * e["height"], reverse=True)
     return filtered[:_MAX_ELEMENTS]
 
 
 def _get_window_bounds(process_name):
-    """Get the frontmost window bounds {left, top, width, height} in pixels (macOS)."""
+    """Get the frontmost window bounds {left, top, width, height} in logical pixels (macOS).
+
+    Tries osascript first, falls back to Quartz CGWindowList.
+    """
     if not IS_MAC:
         return None
     import subprocess
@@ -254,11 +274,26 @@ def _get_window_bounds(process_name):
     try:
         r = subprocess.run(["osascript", "-e", script],
                            capture_output=True, text=True, timeout=3)
-        if r.returncode == 0:
+        if r.returncode == 0 and r.stdout.strip():
             nums = [int(x.strip()) for x in r.stdout.strip().split(",")]
             if len(nums) == 4:
                 return {"left": nums[0], "top": nums[1],
                         "width": nums[2], "height": nums[3]}
+    except Exception:
+        pass
+    # Fallback: Quartz
+    try:
+        import Quartz
+        windows = Quartz.CGWindowListCopyWindowInfo(
+            Quartz.kCGWindowListOptionOnScreenOnly | Quartz.kCGWindowListExcludeDesktopElements,
+            Quartz.kCGNullWindowID
+        )
+        for w in windows:
+            if w.get("kCGWindowOwnerName", "") == process_name:
+                b = w.get("kCGWindowBounds", {})
+                if b:
+                    return {"left": int(b["X"]), "top": int(b["Y"]),
+                            "width": int(b["Width"]), "height": int(b["Height"])}
     except Exception:
         pass
     return None
@@ -403,11 +438,18 @@ def _capture_and_locate(target_text):
     are always included. mss returns logical-resolution images on macOS, so OCR
     coordinates map directly to screen logical coords usable by pynput — no scaling.
 
+    Elements are filtered to the frontmost app's window region (+margin) to
+    exclude MONAD's own terminal output from the results.
+
     Returns (target_element, alternatives_info_str) or an error string.
     The alternatives_info_str is empty when there's only one match.
     """
+    front_app = _get_frontmost_app()
+    app_bounds = _get_window_bounds(front_app) if front_app else None
     img_path = _screenshot()
     elements = _ocr(img_path)
+    if app_bounds:
+        elements = _filter_elements(elements, app_bounds)
     best, all_matches = _find_all_matches(elements, target_text)
     if best:
         alt_info = ""
@@ -484,7 +526,8 @@ def run(action: str = "", **kwargs) -> str:
             elements = _ocr(img_path)
             if not elements:
                 return activate_result
-            elements = _filter_elements(elements)
+            app_bounds = _get_window_bounds(front_app) if front_app else None
+            elements = _filter_elements(elements, app_bounds)
             if not elements:
                 return activate_result
             scope = f"{front_app} screen" if front_app else "full screen"
@@ -502,7 +545,8 @@ def run(action: str = "", **kwargs) -> str:
             elements = _ocr(img_path)
             if not elements:
                 return f"Screen captured ({scope}) but no text elements detected."
-            elements = _filter_elements(elements)
+            app_bounds = _get_window_bounds(front_app) if front_app else None
+            elements = _filter_elements(elements, app_bounds)
             if not elements:
                 return f"Screen captured ({scope}) but all elements were filtered as noise. Try clicking or waiting."
             lines = [f"[{scope}] Found {len(elements)} UI elements:"]
