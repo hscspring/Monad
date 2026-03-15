@@ -336,11 +336,9 @@ def _find_all_matches(elements, target_text):
     """Find all elements matching target text. Returns (best_match, all_matches).
 
     Matching priority for exact matches:
-    - 2 exact matches: prefer the one with larger y. In search UIs, the input field
-      is at the top (small y) and the result is below (larger y). Clicking the input
-      text is usually wrong; clicking the result is correct.
-    - 3+ exact matches: return first encountered — too ambiguous to guess, LLM
-      should use click_xy.
+    - Multiple exact matches: prefer the one with largest y. In search UIs, the input
+      field is at the top (small y) and the result list is below (larger y). Clicking
+      the input text is almost always wrong; the intended result is further down.
     - 1 exact: return it directly.
 
     Partial matches: prefer shorter text (more specific).
@@ -351,9 +349,9 @@ def _find_all_matches(elements, target_text):
     all_matches = exact + partial
     if not all_matches:
         return None, []
-    if len(exact) == 2:
+    if len(exact) >= 2:
         exact.sort(key=lambda e: e["y"])
-        best = exact[-1]
+        best = exact[-1]  # largest y = lowest on screen = result list, not input field
     elif exact:
         best = exact[0]
     else:
@@ -547,6 +545,15 @@ def run(action: str = "", **kwargs) -> str:
                     f'likely a window header/title. If this is a chat app, the chat with '
                     f'"{target["text"]}" may ALREADY be open. Try: type <message> to send '
                     f'a message directly, or click the input area at the bottom of the window.'
+                )
+            elif target["y"] < 120 and not alt_info:
+                # Single match near the top of the window — could be the search INPUT field
+                # (where the user typed the text), not the search RESULT below it.
+                header_hint = (
+                    f' WARNING: Only one "{target["text"]}" found at y={target["y"]} (near window top). '
+                    f'This may be the SEARCH INPUT field, not the result list below. '
+                    f'If the UI did not change, take a screenshot to check if the search results '
+                    f'appeared below. The contact in the results list will be at a larger y coordinate.'
                 )
             return f'Clicked "{target["text"]}" at ({target["x"]},{target["y"]}).{alt_info}{header_hint}'
 

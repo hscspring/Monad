@@ -113,8 +113,9 @@ REASONER_SYSTEM = _PLATFORM_INFO + """You are MONAD, a rational autonomous agent
      - **"发送给 XXX" 面板**：在飞书/微信 cmd+k 搜索后，点击联系人名字会弹出一个结果卡片，里面有一个"发送给 XXX"按钮。**必须点击这个按钮**才能进入聊天窗口。进入聊天后再 `type <消息>` 输入并 `hotkey return` 发送。不要在这一步做其他操作。
      - **各应用搜索快捷键不同**：飞书（Lark）用 `hotkey cmd k`；微信（WeChat）用 `hotkey cmd f`。搜索后必须截图确认搜索框已打开并有结果，再输入联系人名字。
      - **搜索后必须等待再截图**：`type <联系人名>` 输入搜索词后，**先 `wait 1`，再截图**确认搜索结果已出现。搜索结果是异步渲染的，不等待直接截图可能看不到结果。
+     - **用坐标点击搜索结果**：搜索结果截图出来后，**不要用 `click <联系人名>` 文字匹配**（会匹配到搜索框里的输入文字，而不是下方的结果列表）。**必须看截图里联系人的坐标，用 `click_xy <x> <y>` 精确点击**。联系人名字在结果列表里，y 坐标会明显大于搜索框（搜索框通常 y < 80，联系人结果通常 y > 100）。
      - **点击后必须等待再截图**：点击联系人或搜索结果后，**先 `wait 1`，再截图**确认界面已切换到聊天。不要连续点击同一个元素——如果截图后界面没变，说明点击位置不对，需要分析元素坐标再重试。
-     - **发消息完整流程**：搜索 → `wait 1` → 截图确认 → 点击联系人 → `wait 1` → 截图确认聊天已打开 → `type <消息内容>` → `hotkey return` 发送 → 截图确认消息已发出。**缺少 `hotkey return` = 消息没发出去。**
+     - **发消息完整流程**：搜索 → `wait 1` → 截图确认 → 用 `click_xy` 点击结果列表里的联系人 → `wait 1` → 截图确认聊天已打开 → `type <消息内容>` → `hotkey return` 发送 → 截图确认消息已发出。**缺少 `hotkey return` = 消息没发出去。**
 
 你还有已学会的技能（skills），优先使用已有技能。
 
@@ -691,10 +692,11 @@ class Reasoner:
                 # After typing into a search box, LLM must wait briefly then screenshot to see results
                 typed_text = action[4:].strip() if len(action) > 4 else ""
                 return (
-                    f'[Hint: Typed "{typed_text}". Wait briefly for search to respond, then screenshot: '
+                    f'[Hint: Typed "{typed_text}". Wait for search results, then screenshot: '
                     f'1) desktop_control wait 1  '
-                    f'2) desktop_control screenshot — confirm the contact/result is visible before clicking. '
-                    f'Do NOT skip the wait or screenshot.]'
+                    f'2) desktop_control screenshot — find the contact in the RESULT LIST (larger y value). '
+                    f'IMPORTANT: Do NOT use "click {typed_text}" — that may hit the search INPUT box. '
+                    f'Instead use click_xy <x> <y> with the exact coordinates of the contact in the result list.]'
                 )
             if action.startswith("click") and "Also matched:" in result:
                 return (
@@ -711,6 +713,16 @@ class Reasoner:
                         f'This is the search result card. Click it: click 发送给{contact} '
                         f'— then type your message and hotkey return to send.]'
                     )
+            if action.startswith("click") and "WARNING: Only one" in result and "SEARCH INPUT" in result:
+                # Clicked what is likely the search input text, not the result below.
+                # Instruct LLM to wait and screenshot to find the result list.
+                return (
+                    "[Hint: The click may have landed on the SEARCH INPUT field (where you typed), "
+                    "not the contact in the RESULT LIST below. "
+                    "Do: desktop_control wait 1 → desktop_control screenshot. "
+                    "In the screenshot, look for the contact name at a LOWER position (larger y). "
+                    "If you see it, use click_xy <x> <y> with those exact coordinates to click it.]"
+                )
             if action.startswith("click") and "Clicked" in result:
                 # After clicking a contact/search result, the UI needs time to load the chat.
                 # Always wait and then screenshot to confirm the state changed.
