@@ -14,15 +14,9 @@ Usage:
 """
 
 import os
-import platform
-import shutil
 import time
 import tempfile
 from pathlib import Path
-
-IS_MAC = platform.system() == "Darwin"
-IS_WIN = platform.system() == "Windows"
-SELECT_ALL_KEY = "Meta+A" if IS_MAC else "Control+A"
 
 BROWSER_DIR = Path(os.path.expanduser("~/.monad/browser"))
 PROFILE_DIR = BROWSER_DIR / "xhs_profile"
@@ -79,35 +73,19 @@ def login(**kwargs):
 
 def _ensure_node_path():
     """Prepend a modern Node.js (>=18) to PATH so mmdc works."""
-    if shutil.which("mmdc"):
+    nvm_dir = os.path.expanduser("~/.nvm/versions/node")
+    if not os.path.isdir(nvm_dir):
         return
-
-    nvm_candidates = []
-    if IS_WIN:
-        appdata = os.environ.get("APPDATA", "")
-        if appdata:
-            nvm_candidates.append(os.path.join(appdata, "nvm"))
-        nvm_candidates.append(os.path.expanduser("~\\AppData\\Roaming\\nvm"))
-    else:
-        nvm_candidates.append(os.path.expanduser("~/.nvm/versions/node"))
-
-    for nvm_dir in nvm_candidates:
-        if not os.path.isdir(nvm_dir):
-            continue
-        for ver in sorted(os.listdir(nvm_dir), reverse=True):
-            bin_dir = os.path.join(nvm_dir, ver, "bin" if not IS_WIN else "")
-            mmdc_name = "mmdc.cmd" if IS_WIN else "mmdc"
-            mmdc_path = os.path.join(bin_dir, mmdc_name)
-            if os.path.isfile(mmdc_path):
-                try:
-                    major = ver.lstrip("v").split(".")[0]
-                    if int(major) >= 18:
-                        current = os.environ.get("PATH", "")
-                        if bin_dir not in current:
-                            os.environ["PATH"] = f"{bin_dir}{os.pathsep}{current}"
-                        return
-                except ValueError:
-                    continue
+    for ver in sorted(os.listdir(nvm_dir), reverse=True):
+        bin_dir = os.path.join(nvm_dir, ver, "bin")
+        mmdc_path = os.path.join(bin_dir, "mmdc")
+        if os.path.isfile(mmdc_path):
+            major = ver.lstrip("v").split(".")[0]
+            if int(major) >= 18:
+                current = os.environ.get("PATH", "")
+                if bin_dir not in current:
+                    os.environ["PATH"] = f"{bin_dir}:{current}"
+                return
 
 
 def _generate_knowledge_map(content):
@@ -260,7 +238,7 @@ def _fill_and_publish(page, title, content, topics, has_images=False):
     editor = page.locator(".ProseMirror").first
     editor.click()
     time.sleep(0.3)
-    page.keyboard.press(SELECT_ALL_KEY)
+    page.keyboard.press("Meta+A")
     page.keyboard.press("Backspace")
     time.sleep(0.3)
     page.keyboard.type(content, delay=5)

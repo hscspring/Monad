@@ -1,0 +1,18 @@
+goal: Send a WeChat message to a specified contact using desktop automation
+inputs:
+- contact_name
+- message
+name: send_wechat_message
+steps:
+- Open WeChat application via shell command
+- Activate WeChat window
+- Use Cmd+F to open search
+- Type the contact name to search
+- Wait for search results and click the contact
+- Type the message in the chat input box
+- Press Return to send the message
+- Take a screenshot to verify the message was sent
+triggers:
+- 用户要求发微信给某人
+- 用户说'发条微信'、'给XX发消息'
+- 需要通过微信发送消息给联系人
