@@ -111,6 +111,9 @@ REASONER_SYSTEM = _PLATFORM_INFO + """You are MONAD, a rational autonomous agent
      - **发消息必须完成全流程**：找到联系人 → 点击进入聊天 → `type <消息内容>` 输入文字 → 发送（Enter 或点击发送按钮）。缺少 `type` 步骤 = 消息没发出去。
      - **聊天可能已经打开**：如果 screenshot 显示联系人名字出现在窗口顶部（y 坐标很小），这是聊天窗口的标题栏——说明**这个聊天已经打开了**。不需要再搜索或点击联系人，直接 `type <消息>` 输入消息然后 `hotkey return` 发送即可。反复点击标题栏上的名字不会有任何效果。
      - **"发送给 XXX" 面板**：在飞书/微信 cmd+k 搜索后，点击联系人名字会弹出一个结果卡片，里面有一个"发送给 XXX"按钮。**必须点击这个按钮**才能进入聊天窗口。进入聊天后再 `type <消息>` 输入并 `hotkey return` 发送。不要在这一步做其他操作。
+     - **各应用搜索快捷键不同**：飞书（Lark）用 `hotkey cmd k`；微信（WeChat）用 `hotkey cmd f`。搜索后必须截图确认搜索框已打开并有结果，再输入联系人名字。
+     - **搜索后必须截图确认**：`type <联系人名>` 输入搜索词后，**立即截图**确认搜索结果已出现。如果截图里看不到联系人，说明搜索框未打开，需要换方法（换快捷键或直接点击搜索图标）。不要盲目重试同样的快捷键。
+     - **发消息完整流程**：搜索 → 截图确认 → 点击搜索结果 → 截图确认聊天已打开 → `type <消息内容>` → `hotkey return` 发送 → 截图确认消息已发出。**缺少 `hotkey return` = 消息没发出去。**
 
 你还有已学会的技能（skills），优先使用已有技能。
 
@@ -541,9 +544,10 @@ class Reasoner:
                         "For file tasks: you must execute python_exec/shell to write files. "
                         "For desktop tasks: you must execute desktop_control click/type/hotkey "
                         "to interact with the UI — screenshot alone is NOT interaction. "
-                        "For messaging tasks: you MUST use 'type <message>' to actually input "
-                        "the message text, then send it. click alone does NOT send a message. "
-                        "Do NOT answer again until you have ACTUALLY performed the actions."
+                        "For messaging tasks: you MUST (1) use 'type <message>' to input the message "
+                        "text, AND (2) press 'hotkey return' to actually SEND it. "
+                        "Having type without hotkey return = message was typed but NOT sent. "
+                        "Do NOT answer again until you have ACTUALLY typed the message AND pressed return."
                     })
                     continue
 
@@ -645,8 +649,10 @@ class Reasoner:
                         "[Hint: App is in foreground and UI elements are shown above. "
                         "Use click/type/hotkey to interact NOW. Do NOT run open/activate/screenshot again."
                     )
-                    if "Feishu" in result or "Lark" in result or "WeChat" in result or "微信" in result:
-                        hint += " To search for a contact: hotkey cmd k"
+                    if "Feishu" in result or "Lark" in result:
+                        hint += " To search for a contact in Feishu/Lark: hotkey cmd k"
+                    elif "WeChat" in result or "微信" in result:
+                        hint += " To search for a contact in WeChat: hotkey cmd f (NOT cmd+k)"
                     hint += "]"
                     return hint
                 return (
@@ -669,13 +675,25 @@ class Reasoner:
                     "type <text> to enter text, or hotkey to press keys. "
                     "Do NOT take another screenshot until you've performed an action."
                 )
-                if "搜索" not in result and ("Feishu" in result or "Lark" in result or "WeChat" in result or "微信" in result):
+                if "搜索" not in result and ("Feishu" in result or "Lark" in result):
                     hint += (
-                        " To search for a contact/chat in this app: use 'hotkey cmd k' "
-                        "(NOT 'click 搜索' — the search button may not be visible as text)."
+                        " To search for a contact in Feishu/Lark: use 'hotkey cmd k'."
+                    )
+                elif "搜索" not in result and ("WeChat" in result or "微信" in result):
+                    hint += (
+                        " To search for a contact in WeChat: use 'hotkey cmd f' "
+                        "(NOT cmd+k — WeChat uses cmd+f for search)."
                     )
                 hint += "]"
                 return hint
+            if action.startswith("type") and "Typed:" in result:
+                # After typing into a search box, LLM must screenshot to see results
+                typed_text = action[4:].strip() if len(action) > 4 else ""
+                return (
+                    f'[Hint: Typed "{typed_text}". NOW take a screenshot to see if the '
+                    f'search results appeared. Do NOT assume the search worked — you MUST '
+                    f'screenshot to confirm the contact/result is visible before clicking.]'
+                )
             if action.startswith("click") and "Also matched:" in result:
                 return (
                     "[Hint: Multiple elements matched your click target. If the clicked element "
@@ -768,21 +786,28 @@ class Reasoner:
             else:
                 return True
 
-        # --- Check 3: Messaging tasks specifically require type action ---
+        # --- Check 3: Messaging tasks require type + hotkey return (or click send button) ---
+        # A lone 'type' could be search input — only count it if followed by
+        # 'hotkey return' / 'hotkey enter' / click on a send button.
         messaging_keywords = ["发消息", "发信息", "发个消息", "发送消息",
                               "给.*发.*消息", "给.*说", "告诉.*", "问.*",
                               "send.*message", "send.*msg"]
         if any(re.search(kw, task_lower) for kw in messaging_keywords):
-            has_type = False
-            for action in actions:
-                if action.get("capability") != "desktop_control":
-                    continue
-                act_str = action.get("params", {}).get("action", "")
-                cmd = act_str.strip().split(None, 1)[0].lower() if act_str.strip() else ""
-                if cmd == "type":
-                    has_type = True
-                    break
-            if not has_type:
+            dc_actions = [
+                a.get("params", {}).get("action", "").strip()
+                for a in actions
+                if a.get("capability") == "desktop_control"
+            ]
+            # Check that we see: type <something> AND (hotkey return/enter OR click send)
+            has_type = any(a.lower().startswith("type ") for a in dc_actions)
+            has_send = any(
+                a.lower() in ("hotkey return", "hotkey enter", "hotkey cmd return")
+                or (a.lower().startswith("click") and any(
+                    kw in a for kw in ("发送", "Send", "send", "发 ")
+                ))
+                for a in dc_actions
+            )
+            if not (has_type and has_send):
                 return True
 
         return False

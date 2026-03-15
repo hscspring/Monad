@@ -164,10 +164,21 @@ class TestHollowAnswerGuard:
         assert reasoner._is_hollow_answer("打开飞书给cube发消息", actions) is True
 
     def test_desktop_send_message_with_click_not_hollow(self, reasoner):
+        # type alone without hotkey return is still hollow — message not actually sent
         actions = [
             {"capability": "desktop_control", "params": {"action": "activate Lark"}},
             {"capability": "desktop_control", "params": {"action": "click cube"}},
             {"capability": "desktop_control", "params": {"action": "type 你好"}},
+        ]
+        assert reasoner._is_hollow_answer("给cube发消息", actions) is True
+
+    def test_desktop_send_message_with_type_and_return_not_hollow(self, reasoner):
+        # type + hotkey return = message actually sent
+        actions = [
+            {"capability": "desktop_control", "params": {"action": "activate Lark"}},
+            {"capability": "desktop_control", "params": {"action": "click cube"}},
+            {"capability": "desktop_control", "params": {"action": "type 你好"}},
+            {"capability": "desktop_control", "params": {"action": "hotkey return"}},
         ]
         assert reasoner._is_hollow_answer("给cube发消息", actions) is False
 
