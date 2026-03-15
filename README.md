@@ -30,7 +30,7 @@ Instead, it **autonomously learns** how to complete your tasks by writing and ex
 
 *   **File System as Database:** The system itself has no memory of past sessions. It persists all learned information (axioms, environment knowledge, learned skills, user context, and experiences) directly to local Markdown files. No vector databases, no RAG, zero external dependencies.
 *   **Absolute Rationality:** MONAD follows a strict reasoning loop (`Analyze → Self-check → Learn → Execute → Reflect`) to accomplish goals logically.
-*   **Self-Learning & Self-Evolving:** Instead of shipping with 100 tools, MONAD ships with only 5 basic instincts (hands 🤲, voice 🗣️, eyes 👁️, dialogue 💬, screen 🖥️). It learns everything else by generating code.
+*   **Self-Learning & Self-Evolving:** Instead of shipping with 100 tools, MONAD ships with only 5 basic instincts (hands 🤲, voice 🗣️, eyes 👁️, dialogue 💬, screen 🖥️) plus a growing library of built-in skills. It learns everything else by generating code.
 *   **LLM as a Command Executor:** The LLM's own training data is disregarded. All factual information must be retrieved from the real world via code execution or web perception.
 *   **Stateless Message Management:** Every user request starts with a fresh, clean message context. MONAD doesn't rely on LLM Chat History; instead, it persists vital information via reflection loops. This ensures reasoning purity and prevents hallucination buildup from long conversations.
 *   **Search First, Ask Later:** When stuck during execution (errors, missing packages, unfamiliar tools), MONAD's first instinct is to search the web via `web_fetch`, never to guess. But if the user's intent is unclear, MONAD asks the user first. In short: **unclear query → ask user; execution problem → search first**.
@@ -78,8 +78,25 @@ knowledge/
 │   ├── pending.jsonl            # Short-term: all recent experiences (staging area)
 │   └── accumulated_experiences.md  # Long-term: promoted high-frequency patterns
 ├── protocols/       # Error handling protocols
-└── tools/           # Documentation for the 5 basic capabilities
+└── tools/           # Documentation for the 5 basic capabilities + built-in skills
 ```
+
+---
+
+## 🛠️ Built-in Skills
+
+Beyond the 5 core instincts, MONAD ships with a set of ready-to-use skills:
+
+| Skill | Description |
+| :--- | :--- |
+| `record_screen` | Background screen recording to mp4 via ffmpeg. `start`/`stop`/`status` actions, non-blocking — runs alongside other tasks. |
+| `publish_to_xhs` | Publish posts/articles to Xiaohongshu (RED). Supports text + image. |
+| `fetch_topic_news` | Fetch and summarize latest news on any topic from the web. |
+| `parse_document` | Parse and extract structured content from documents (PDF, Word, etc.). |
+| `web_to_markdown` | Convert any web page to clean Markdown. |
+| `doc_to_knowledge_map` | Transform a document into a structured knowledge graph in Markdown. |
+
+> Skills are Python modules (`executor.py` + `skill.yaml`). MONAD can also auto-generate new skills from any successful task.
 
 ---
 
