@@ -401,7 +401,7 @@ class Reasoner:
                         auto_result = execute_fn("desktop_control", action="screenshot")
                         Output.action("desktop_control", "[自动] 截屏以推进流程")
                         Output.observation(auto_result[:500] if len(auto_result) > 500 else auto_result)
-                        hint = self._action_hint("desktop_control", {"action": "screenshot"}, auto_result)
+                        hint = self._action_hint("desktop_control", {"action": "screenshot"}, auto_result, user_input)
                         if hint:
                             auto_result += "\n" + hint
                         history.append({"role": "user", "content":
@@ -457,7 +457,7 @@ class Reasoner:
                             auto_result = execute_fn("desktop_control", action="screenshot")
                             Output.action("desktop_control", "[自动] 截屏替代重复 open")
                             Output.observation(auto_result[:500] if len(auto_result) > 500 else auto_result)
-                            hint = self._action_hint("desktop_control", {"action": "screenshot"}, auto_result)
+                            hint = self._action_hint("desktop_control", {"action": "screenshot"}, auto_result, user_input)
                             if hint:
                                 auto_result += "\n" + hint
                             history.append({"role": "user", "content":
@@ -525,7 +525,7 @@ class Reasoner:
                     Output.observation(f"[验证] {verification}")
 
                 # Smart hint: guide LLM to next step after opening an app
-                hint = self._action_hint(capability, params, result)
+                hint = self._action_hint(capability, params, result, user_input)
                 if hint:
                     result = result + "\n" + hint
 
@@ -667,7 +667,7 @@ class Reasoner:
         return "\n\n".join(sections)
 
     @staticmethod
-    def _action_hint(capability: str, params: dict, result: str) -> str:
+    def _action_hint(capability: str, params: dict, result: str, user_input: str = "") -> str:
         """Generate contextual hints to guide the LLM to the next logical step."""
         import re as _re
         if capability == "shell":
@@ -784,13 +784,27 @@ class Reasoner:
                     "If you see it, use click_xy <x> <y> with those exact coordinates to click it.]"
                 )
             if action.startswith("click") and "Clicked" in result:
-                # After clicking a contact/search result, the UI needs time to load the chat.
-                # Always wait and then screenshot to confirm the state changed.
+                # After clicking a contact/search result, give precise next steps.
+                # Extract the message to send from user_input if available.
+                import re as _re2
+                msg_match = _re2.search(r'[""「\'"]([^"""\'」]{1,50})[""」\'"]', user_input)
+                if msg_match:
+                    msg = msg_match.group(1)
+                    return (
+                        f"[Hint: Click executed. The chat window should now be open. "
+                        f"Your EXACT next steps — do them IN ORDER, no skipping:\n"
+                        f"1. desktop_control wait 1\n"
+                        f"2. desktop_control screenshot — confirm the chat is open\n"
+                        f"3. desktop_control type {msg}\n"
+                        f"4. desktop_control hotkey return — SEND the message\n"
+                        f"5. desktop_control screenshot — confirm message was sent\n"
+                        f"Do NOT activate, do NOT open, do NOT search again.]"
+                    )
                 return (
                     "[Hint: Click executed. Now wait for the UI to respond: "
                     "desktop_control wait 1 — then desktop_control screenshot "
                     "to confirm whether the chat/page opened. "
-                    "Do NOT click again without first seeing the updated screen.]"
+                    "Do NOT click/activate/open again without first seeing the updated screen.]"
                 )
         return ""
 

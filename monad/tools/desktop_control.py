@@ -218,10 +218,15 @@ def _is_self_noise(text):
     if _SELF_NOISE_RE is None:
         import re
         _SELF_NOISE_RE = re.compile(
-            r'\[?MONAD\]|Reasoning\s*Turn|desktop_control\]|python_exec\]|'
-            r'web_fetch\]|shell\]:|'
+            r'MONAD[】\]」]|[【\[「]MONAD|'
+            r'Reasoning\s*Turn|desktop_control|python_exec|'
+            r'web_fetch|shell\]|'
+            r'LLM\s*返回类型|正在调用\s*LLM|LLM\s*进行推理|'
+            r'检测到空洞回答|强制要求执行|声称完成操作|'
+            r'已在前台.*跳过重复|自动截屏|截屏替代|'
             r'at\s*[（(]\s*\d+\s*[,，]\s*\d+\s*[）)].*size\s*\d+x\d+|'
-            r'size\s+\d+x\d+.*at\s*[（(]',
+            r'size\s+\d+x\d+.*at\s*[（(]|'
+            r'\d+x\d+.*at\s*[（(]\s*\d+',
             re.IGNORECASE
         )
     return bool(_SELF_NOISE_RE.search(text))
