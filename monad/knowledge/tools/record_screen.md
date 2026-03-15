@@ -1,34 +1,45 @@
-# record_screen skill
+# Screen Recording (start_recording + stop_recording)
 
-录制屏幕为 mp4 视频（后台运行，不阻塞其他任务）。
+Screen recording is split into two atomic skills for composability.
 
-## 用法
+## start_recording
+
+Start background screen recording. Returns immediately (non-blocking).
 
 ```python
-record_screen(action="start")                           # 开始录制，立即返回
-record_screen(action="start", output_path="/tmp/demo.mp4")  # 指定输出路径
-record_screen(action="status")                          # 查询录制状态
-record_screen(action="stop")                            # 停止录制，返回文件路径
+start_recording()                                    # default output to ~/.monad/output/
+start_recording(output_path="/tmp/demo.mkv")         # custom path
 ```
 
-## 参数
+| Parameter | Description |
+|-----------|-------------|
+| output_path | Optional. Output file path (MKV format during recording). Default: `~/.monad/output/recording_<timestamp>.mkv` |
 
-| 参数 | 说明 |
-|------|------|
-| action | 必填：start / stop / status |
-| output_path | 可选（仅 start 有效），默认 ~/.monad/output/recording_<timestamp>.mp4 |
+Records to MKV via ffmpeg AVFoundation. State persisted to `~/.monad/cache/recording_state.json`.
 
-## 典型工作流
+## stop_recording
+
+Stop the current recording, transcode to MP4, return the file path and download URL.
+
+```python
+stop_recording()
+```
+
+Returns: file path + `http://localhost:8000/output/<filename>.mp4` download link.
+
+Internally sends SIGTERM to the ffmpeg process, then transcodes MKV → MP4 with `+faststart` (guarantees valid moov atom and browser-playable file).
+
+## Typical Workflow
 
 ```
-1. record_screen(action="start")          # 开始录屏
-2. ... 执行其他任务（发消息、抓网页等）...
-3. record_screen(action="stop")           # 停止录屏，得到 mp4 路径
+1. start_recording()                    # begin recording
+2. ... perform other tasks ...          # send messages, browse, etc.
+3. stop_recording()                     # stop recording, get MP4 path + URL
 ```
 
-## 注意事项
+## Notes
 
-- 首次使用需在系统偏好设置 → 隐私与安全性 → 屏幕录制 → 勾选终端/Python 授权
-- 录制全屏（2880x1800 Retina），含系统音频
-- 基于 ffmpeg，需已安装（brew install ffmpeg）
-- 录制为后台进程，不影响其他 skill 并发执行
+- Requires screen recording permission: System Preferences → Privacy & Security → Screen Recording → enable Terminal/Python
+- Records full screen (Retina resolution) with system audio
+- Requires ffmpeg (`brew install ffmpeg`)
+- Recording runs as a background process; other skills can execute concurrently

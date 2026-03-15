@@ -10,22 +10,30 @@ All notable changes to this project will be documented in this file.
 - **Skill: markdown_to_knowledge_map**: Renamed from `doc_to_knowledge_map`; accepts Markdown/text/URL/file as input.
 - **reasoner: "发送给 XXX" hint**: When a screenshot shows a Feishu/WeChat search result card with "发送给 XXX", the action hint now explicitly tells the LLM to click it to enter the chat, then type the message.
 - **system prompt: 搜索面板 "发送给" 说明**: Added guidance that after cmd+k search, clicking a contact shows a "发送给 XXX" card — must click it to enter chat.
+- **reasoner: complete hint chain for messaging**: After each desktop_control action (`hotkey`, `type`, `click`, `wait`), a contextual hint guides the LLM to the next step. The full chain: `hotkey cmd f` → type contact name → `wait 1` → `screenshot` → `click_xy` on result → `wait 1` → `screenshot` → `type <message>` → `hotkey return`.
+- **reasoner: hollow answer guard extracts message content**: Dynamically extracts the expected message from user input and provides step-by-step rejection instructions when LLM claims completion prematurely.
 
 ### Changed
 - **record_screen skill removed**: Replaced by `start_recording` + `stop_recording` (two atomic skills). The single-skill design had an irrecoverable cross-process stdin issue that caused all recorded MP4s to have missing moov atoms (unplayable).
 - **doc_to_knowledge_map renamed** to `markdown_to_knowledge_map` to reflect that its primary input is Markdown/text and to align with the future skill pipeline design.
+
+### Fixed
+- **desktop_control: window bounds selected wrong window**: `_get_window_bounds()` was using osascript's `window 1`, which returned a 240×51 notification float for WeChat instead of the 934×724 main window. This caused `_filter_elements` to discard nearly all OCR results (47 → 2 elements), making the LLM effectively blind to the app's UI. Now uses Quartz `CGWindowListCopyWindowInfo` exclusively and picks the window with the **largest area**.
+- **desktop_control: activate hint said `cmd k` for WeChat**: The auto-screenshot message after `activate` incorrectly suggested `hotkey cmd k` for contact search. WeChat uses `cmd f`; only Feishu/Lark uses `cmd k`.
+- **desktop_control: search result vs input ambiguity**: `_find_all_matches()` now prefers the largest-y element for any number of exact matches (≥2), not just exactly 2. Adds `WARNING: SEARCH INPUT` hint when a single exact match is near the top of the window (y<120).
+- **desktop_control: window-scoped OCR filtering**: Full-screen `mss` captures include terminal output. `_filter_elements` now accepts `app_bounds` and restricts OCR results to the target app's window region (±60px margin for overlays).
+- **desktop_control: expanded self-noise regex**: `_is_self_noise()` now catches more OCR variants of MONAD's terminal logs (brackets, Chinese punctuation, common log patterns).
 
 ## [0.4.0] - 2026-03-15
 
 ### Added
 - **Capability: desktop_control**: New 5th built-in capability for controlling any desktop application via screenshot + OCR + keyboard/mouse input. Lightweight, cross-platform stack: `mss` (screenshot), `rapidocr-onnxruntime` (OCR), `pynput` (input). The LLM only sees text (OCR results with coordinates), never images. Actions: `screenshot`, `click`, `type`, `hotkey`, `find`, `click_xy`, `double_click`, `wait`, `activate`. Optional install: `pip install monad-core[desktop]`.
 - **desktop_control `activate` action**: Brings target app to foreground via `osascript` (macOS) or PowerShell (Windows), waits 1.5s, verifies frontmost app, then **auto-screenshots** the active window so the LLM immediately sees current UI elements without a separate screenshot step.
-- **Window-scoped screenshot (macOS)**: Uses `screencapture -l <windowID>` to capture only the frontmost app's window, even if occluded. Eliminates terminal log noise from OCR results.
-- **Retina coordinate scaling**: `_adjust_coords_to_screen()` converts OCR pixel coordinates from 2x Retina screenshots back to logical screen points, offset by window position, for accurate `pynput` clicks.
+- **Full-screen screenshot via `mss`**: Uses `mss` for cross-platform full-screen capture at **logical resolution** on macOS Retina. OCR coordinates map directly to `pynput` click coordinates with zero scaling. Combined with window-bounds filtering to exclude non-target app elements.
 - **OCR noise filtering**: `_filter_elements()` removes garbled, short, or low-confidence OCR fragments. `_is_self_noise()` specifically strips MONAD's own terminal log output from screenshots.
 - **App alias matching**: `_APP_ALIASES` + `_is_same_app()` maps Lark↔Feishu, WeChat↔Weixin, etc. for robust foreground verification.
-- **Smart element matching**: `_find_all_matches()` disambiguates duplicate text (e.g. search input vs search result). With exactly 2 exact matches, prefers the lower-y element (search result below input). Reports all `Also matched` alternatives in click response so LLM can use `click_xy` for precision.
-- **Header-area click hint**: When clicking an element at `y < 60` (window title bar), response warns that the chat/window may already be open and suggests `type <message>` directly.
+- **Smart element matching**: `_find_all_matches()` disambiguates duplicate text (e.g. search input vs search result). With ≥2 exact matches, prefers the lower-y element (search result below input). Reports all `Also matched` alternatives in click response so LLM can use `click_xy` for precision.
+- **Header-area click hint**: When clicking an element near the top of the window, response warns it may be the search input and suggests `click_xy` on the actual result below.
 - **Optional dependency group `[all]`**: `pip install monad-core[all]` installs all optional extras (feishu + desktop).
 - **Platform-aware Reasoner**: System prompt dynamically injects OS/arch/shell info at startup. LLM generates platform-correct commands (e.g. `dir` on Windows, `ls` on Unix).
 - **Comprehensive Test Suite Expansion**: 141 new tests (109 → 250 total) covering desktop_control, config, skill_builder, llm, loop, ask_user, and expanded coverage for executor, reasoner, and vault.
