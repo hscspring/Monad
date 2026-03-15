@@ -265,40 +265,33 @@ def _filter_elements(elements, app_bounds=None):
 
 
 def _get_window_bounds(process_name):
-    """Get the frontmost window bounds {left, top, width, height} in logical pixels (macOS).
+    """Get the LARGEST window bounds for a process in logical pixels (macOS).
 
-    Tries osascript first, falls back to Quartz CGWindowList.
+    Uses Quartz CGWindowList to find all on-screen windows owned by the process,
+    then returns the one with the largest area. This avoids picking up tiny
+    notification floats or mini-windows that osascript's 'window 1' might return.
     """
     if not IS_MAC:
         return None
-    import subprocess
-    script = (
-        f'tell application "System Events" to tell process "{process_name}" to '
-        f'get {{position, size}} of window 1'
-    )
-    try:
-        r = subprocess.run(["osascript", "-e", script],
-                           capture_output=True, text=True, timeout=3)
-        if r.returncode == 0 and r.stdout.strip():
-            nums = [int(x.strip()) for x in r.stdout.strip().split(",")]
-            if len(nums) == 4:
-                return {"left": nums[0], "top": nums[1],
-                        "width": nums[2], "height": nums[3]}
-    except Exception:
-        pass
-    # Fallback: Quartz
     try:
         import Quartz
         windows = Quartz.CGWindowListCopyWindowInfo(
             Quartz.kCGWindowListOptionOnScreenOnly | Quartz.kCGWindowListExcludeDesktopElements,
             Quartz.kCGNullWindowID
         )
+        best = None
+        best_area = 0
         for w in windows:
             if w.get("kCGWindowOwnerName", "") == process_name:
                 b = w.get("kCGWindowBounds", {})
-                if b:
-                    return {"left": int(b["X"]), "top": int(b["Y"]),
+                if not b:
+                    continue
+                area = b.get("Width", 0) * b.get("Height", 0)
+                if area > best_area:
+                    best_area = area
+                    best = {"left": int(b["X"]), "top": int(b["Y"]),
                             "width": int(b["Width"]), "height": int(b["Height"])}
+        return best
     except Exception:
         pass
     return None
@@ -540,7 +533,7 @@ def run(action: str = "", **kwargs) -> str:
                      f"[Auto-screenshot of {scope}] Found {len(elements)} UI elements:"]
             for e in elements:
                 lines.append(f'  "{e["text"]}" at ({e["x"]},{e["y"]}) size {e["width"]}x{e["height"]}')
-            lines.append("\nNow use click/type/hotkey to interact. To search for a contact: hotkey cmd k")
+            lines.append("\nNow use click/type/hotkey to interact. To search for a contact: hotkey cmd f")
             return "\n".join(lines)
 
         elif cmd == "screenshot":
