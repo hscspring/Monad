@@ -748,6 +748,12 @@ class Reasoner:
                         "Example: desktop_control type 太笨不会起. "
                         "Do NOT click the search box, do NOT type the message content yet.]"
                     )
+            if action.startswith("wait") and "Waited" in result:
+                return (
+                    "[Hint: Wait complete. NOW take a screenshot immediately: "
+                    "desktop_control screenshot — to see the current state of the UI. "
+                    "Do NOT skip the screenshot. Do NOT repeat previous actions.]"
+                )
             if action.startswith("type") and "Typed:" in result:
                 # After typing into a search box, LLM must wait briefly then screenshot to see results
                 typed_text = action[4:].strip() if len(action) > 4 else ""
