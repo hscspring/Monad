@@ -711,22 +711,43 @@ class Reasoner:
                         f'Click it to open the chat: click 发送给{contact} '
                         f'— then immediately type your message and press hotkey return to send.]'
                     )
-                hint = (
-                    "[Hint: You can now see the screen. Use click <text> to click a button, "
-                    "type <text> to enter text, or hotkey to press keys. "
-                    "Do NOT take another screenshot until you've performed an action."
-                )
-                if "搜索" not in result and ("Feishu" in result or "Lark" in result):
-                    hint += (
-                        " To search for a contact in Feishu/Lark: use 'hotkey cmd k'."
+                # If search box is already open, tell LLM to type the contact name
+                search_open = any(kw in result for kw in ("Search", "搜索", "search"))
+                if search_open:
+                    # Extract contact name from user_input for the hint
+                    hint = (
+                        "[Hint: The SEARCH BOX is already open. "
+                        "Do NOT click the search box. Do NOT type the message yet. "
+                        "Type the CONTACT NAME to search: desktop_control type <contact_name>. "
+                        "Then wait 1 second and screenshot to see results. "
+                        "Only after finding and clicking the contact should you type the message.]"
                     )
-                elif "搜索" not in result and ("WeChat" in result or "微信" in result):
-                    hint += (
-                        " To search for a contact in WeChat: use 'hotkey cmd f' "
-                        "(NOT cmd+k — WeChat uses cmd+f for search)."
+                else:
+                    hint = (
+                        "[Hint: You can now see the screen. Use click <text> to click a button, "
+                        "type <text> to enter text, or hotkey to press keys. "
+                        "Do NOT take another screenshot until you've performed an action."
                     )
+                    if "Feishu" in result or "Lark" in result:
+                        hint += (
+                            " To search for a contact in Feishu/Lark: use 'hotkey cmd k'."
+                        )
+                    elif "WeChat" in result or "微信" in result:
+                        hint += (
+                            " To search for a contact in WeChat: use 'hotkey cmd f' "
+                            "(NOT cmd+k — WeChat uses cmd+f for search)."
+                        )
                 hint += "]"
                 return hint
+            if action.startswith("hotkey") and "Pressed hotkey" in result:
+                keys = action.replace("hotkey", "").strip().lower()
+                if keys in ("cmd f", "cmd k"):
+                    return (
+                        "[Hint: Search shortcut pressed. The search box should now be open. "
+                        "Your next step: type the CONTACT NAME (not the message). "
+                        "Example: desktop_control type 太笨不会起. "
+                        "Do NOT click the search box, do NOT type the message content yet.]"
+                    )
             if action.startswith("type") and "Typed:" in result:
                 # After typing into a search box, LLM must wait briefly then screenshot to see results
                 typed_text = action[4:].strip() if len(action) > 4 else ""
