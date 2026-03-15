@@ -112,8 +112,9 @@ REASONER_SYSTEM = _PLATFORM_INFO + """You are MONAD, a rational autonomous agent
      - **聊天可能已经打开**：如果 screenshot 显示联系人名字出现在窗口顶部（y 坐标很小），这是聊天窗口的标题栏——说明**这个聊天已经打开了**。不需要再搜索或点击联系人，直接 `type <消息>` 输入消息然后 `hotkey return` 发送即可。反复点击标题栏上的名字不会有任何效果。
      - **"发送给 XXX" 面板**：在飞书/微信 cmd+k 搜索后，点击联系人名字会弹出一个结果卡片，里面有一个"发送给 XXX"按钮。**必须点击这个按钮**才能进入聊天窗口。进入聊天后再 `type <消息>` 输入并 `hotkey return` 发送。不要在这一步做其他操作。
      - **各应用搜索快捷键不同**：飞书（Lark）用 `hotkey cmd k`；微信（WeChat）用 `hotkey cmd f`。搜索后必须截图确认搜索框已打开并有结果，再输入联系人名字。
-     - **搜索后必须截图确认**：`type <联系人名>` 输入搜索词后，**立即截图**确认搜索结果已出现。如果截图里看不到联系人，说明搜索框未打开，需要换方法（换快捷键或直接点击搜索图标）。不要盲目重试同样的快捷键。
-     - **发消息完整流程**：搜索 → 截图确认 → 点击搜索结果 → 截图确认聊天已打开 → `type <消息内容>` → `hotkey return` 发送 → 截图确认消息已发出。**缺少 `hotkey return` = 消息没发出去。**
+     - **搜索后必须等待再截图**：`type <联系人名>` 输入搜索词后，**先 `wait 1`，再截图**确认搜索结果已出现。搜索结果是异步渲染的，不等待直接截图可能看不到结果。
+     - **点击后必须等待再截图**：点击联系人或搜索结果后，**先 `wait 1`，再截图**确认界面已切换到聊天。不要连续点击同一个元素——如果截图后界面没变，说明点击位置不对，需要分析元素坐标再重试。
+     - **发消息完整流程**：搜索 → `wait 1` → 截图确认 → 点击联系人 → `wait 1` → 截图确认聊天已打开 → `type <消息内容>` → `hotkey return` 发送 → 截图确认消息已发出。**缺少 `hotkey return` = 消息没发出去。**
 
 你还有已学会的技能（skills），优先使用已有技能。
 
@@ -687,12 +688,13 @@ class Reasoner:
                 hint += "]"
                 return hint
             if action.startswith("type") and "Typed:" in result:
-                # After typing into a search box, LLM must screenshot to see results
+                # After typing into a search box, LLM must wait briefly then screenshot to see results
                 typed_text = action[4:].strip() if len(action) > 4 else ""
                 return (
-                    f'[Hint: Typed "{typed_text}". NOW take a screenshot to see if the '
-                    f'search results appeared. Do NOT assume the search worked — you MUST '
-                    f'screenshot to confirm the contact/result is visible before clicking.]'
+                    f'[Hint: Typed "{typed_text}". Wait briefly for search to respond, then screenshot: '
+                    f'1) desktop_control wait 1  '
+                    f'2) desktop_control screenshot — confirm the contact/result is visible before clicking. '
+                    f'Do NOT skip the wait or screenshot.]'
                 )
             if action.startswith("click") and "Also matched:" in result:
                 return (
@@ -709,6 +711,15 @@ class Reasoner:
                         f'This is the search result card. Click it: click 发送给{contact} '
                         f'— then type your message and hotkey return to send.]'
                     )
+            if action.startswith("click") and "Clicked" in result:
+                # After clicking a contact/search result, the UI needs time to load the chat.
+                # Always wait and then screenshot to confirm the state changed.
+                return (
+                    "[Hint: Click executed. Now wait for the UI to respond: "
+                    "desktop_control wait 1 — then desktop_control screenshot "
+                    "to confirm whether the chat/page opened. "
+                    "Do NOT click again without first seeing the updated screen.]"
+                )
         return ""
 
     @staticmethod

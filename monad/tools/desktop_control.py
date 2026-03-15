@@ -23,7 +23,6 @@ IS_WIN = platform.system() == "Windows"
 
 _ocr_engine = None
 _SCREENSHOT_PATH = os.path.join(tempfile.gettempdir(), "monad_screen.png")
-_SCREENSHOT_FULL_PATH = os.path.join(tempfile.gettempdir(), "monad_screen_full.png")
 
 
 def _get_ocr():
@@ -76,10 +75,9 @@ def _screenshot_window(process_name):
     return _SCREENSHOT_PATH, bounds
 
 
-def _screenshot(region=None, output_path=None):
+def _screenshot(region=None):
     """Capture screen to file. Returns path to PNG."""
     import mss
-    dest = output_path or _SCREENSHOT_PATH
     with mss.mss() as sct:
         monitor = sct.monitors[1]
         if region:
@@ -90,8 +88,8 @@ def _screenshot(region=None, output_path=None):
                 "height": region.get("height", monitor["height"]),
             }
         shot = sct.grab(monitor)
-        mss.tools.to_png(shot.rgb, shot.size, output=dest)
-    return dest
+        mss.tools.to_png(shot.rgb, shot.size, output=_SCREENSHOT_PATH)
+    return _SCREENSHOT_PATH
 
 
 def _ocr(image_path):
@@ -370,33 +368,6 @@ def _find_element(elements, target_text):
     return best
 
 
-def _merge_elements(window_elements, fullscreen_elements):
-    """Merge fullscreen OCR elements with window elements to capture overlay panels.
-
-    Window elements are already in screen logical coords (after _adjust_coords_to_screen).
-    Fullscreen elements from mss are also in screen logical coords (mss uses logical pixels).
-
-    Strategy: include all elements from both sources, deduplicating by (text, nearby-coords).
-    This ensures floating overlays (search panels, dropdowns, popovers) are never missed.
-    """
-    if not fullscreen_elements:
-        return window_elements
-
-    window_by_text = {}
-    for e in window_elements:
-        window_by_text.setdefault(e["text"], []).append(e)
-
-    merged = list(window_elements)
-    for e in fullscreen_elements:
-        candidates = window_by_text.get(e["text"], [])
-        is_dup = any(
-            abs(c["x"] - e["x"]) < 15 and abs(c["y"] - e["y"]) < 15
-            for c in candidates
-        )
-        if not is_dup:
-            merged.append(e)
-            window_by_text.setdefault(e["text"], []).append(e)
-    return merged
 
 
 def _adjust_coords_to_screen(elements, img_path, window_bounds):
@@ -430,9 +401,6 @@ def _adjust_coords_to_screen(elements, img_path, window_bounds):
 def _capture_and_locate(target_text):
     """Capture the frontmost window, OCR, and find the target element.
 
-    Also captures a fullscreen fallback so overlay panels (e.g. WeChat search results)
-    that live outside the main window boundary are included.
-
     Returns (target_element, alternatives_info_str) or an error string.
     The alternatives_info_str is empty when there's only one match.
     """
@@ -443,17 +411,9 @@ def _capture_and_locate(target_text):
         img_path, window_bounds = _screenshot_window(front_app)
     if not img_path:
         img_path = _screenshot()
-        window_bounds = None
     elements = _ocr(img_path)
     if window_bounds:
         _adjust_coords_to_screen(elements, img_path, window_bounds)
-        # Also OCR fullscreen to catch floating overlays (search panels, popovers, etc.)
-        try:
-            full_img = _screenshot(output_path=_SCREENSHOT_FULL_PATH)
-            full_elements = _ocr(full_img)
-            elements = _merge_elements(elements, full_elements)
-        except Exception:
-            pass
     best, all_matches = _find_all_matches(elements, target_text)
     if best:
         alt_info = ""
@@ -559,19 +519,11 @@ def run(action: str = "", **kwargs) -> str:
                     scope = f"{front_app} window"
             if not img_path:
                 img_path = _screenshot()
-                window_bounds = None
             elements = _ocr(img_path)
             if not elements:
                 return f"Screen captured ({scope}) but no text elements detected."
             if window_bounds:
                 _adjust_coords_to_screen(elements, img_path, window_bounds)
-                # Also capture fullscreen to include floating overlays
-                try:
-                    full_img = _screenshot(output_path=_SCREENSHOT_FULL_PATH)
-                    full_elements = _ocr(full_img)
-                    elements = _merge_elements(elements, full_elements)
-                except Exception:
-                    pass
             elements = _filter_elements(elements)
             if not elements:
                 return f"Screen captured ({scope}) but all elements were filtered as noise. Try clicking or waiting."
