@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Added
+- **Skill: record_screen**: New built-in skill for background screen recording as mp4. Supports `start` / `stop` / `status` actions. Uses `ffmpeg avfoundation` (macOS), records at 30fps with h264+aac, non-blocking (doesn't interrupt other tasks). State persisted to `~/.monad/cache/record_screen.json` between calls. 10 unit tests added.
+
 ## [0.4.0] - 2026-03-15
 
 ### Added
