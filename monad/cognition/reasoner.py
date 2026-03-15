@@ -540,17 +540,56 @@ class Reasoner:
                 if self._is_hollow_answer(user_input, actions):
                     Output.warn("检测到空洞回答：声称完成操作但未实际执行，强制要求执行")
                     history.append({"role": "assistant", "content": raw_response})
-                    history.append({"role": "user", "content":
-                        "[SYSTEM] Your answer claims you completed the task, but action history "
-                        "shows you did NOT actually perform the required operations. "
-                        "For file tasks: you must execute python_exec/shell to write files. "
-                        "For desktop tasks: you must execute desktop_control click/type/hotkey "
-                        "to interact with the UI — screenshot alone is NOT interaction. "
-                        "For messaging tasks: you MUST (1) use 'type <message>' to input the message "
-                        "text, AND (2) press 'hotkey return' to actually SEND it. "
-                        "Having type without hotkey return = message was typed but NOT sent. "
-                        "Do NOT answer again until you have ACTUALLY typed the message AND pressed return."
-                    })
+                    # Build a targeted rejection message based on what's missing
+                    dc_actions_done = [
+                        a.get("params", {}).get("action", "").strip()
+                        for a in actions
+                        if a.get("capability") == "desktop_control"
+                    ]
+                    has_type = any(a.lower().startswith("type ") for a in dc_actions_done)
+                    has_send = any(
+                        a.lower() in ("hotkey return", "hotkey enter", "hotkey cmd return")
+                        for a in dc_actions_done
+                    )
+                    has_click = any(
+                        a.lower().startswith(("click", "click_xy"))
+                        for a in dc_actions_done
+                    )
+                    # Only count 'type' as "message typed" if the typed content
+                    # matches the message to send (not just a contact search term).
+                    import re as _re2
+                    msg_match = _re2.search(r'[""「\'"]([^"""\'」]{1,50})[""」\'"]', user_input)
+                    expected_msg = msg_match.group(1) if msg_match else None
+                    has_msg_typed = any(
+                        a.lower().startswith("type ")
+                        and (expected_msg is None or expected_msg.lower() in a.lower())
+                        for a in dc_actions_done
+                    )
+                    if has_click and not has_msg_typed:
+                        msg_to_type = expected_msg or "<message content>"
+                        reject_msg = (
+                            "[SYSTEM] You clicked a contact but you have NOT typed the message yet. "
+                            "The chat window should now be open. Your ONLY next steps are:\n"
+                            f"1. desktop_control screenshot — confirm the chat is open\n"
+                            f"2. desktop_control type {msg_to_type} — type the message in the chat input\n"
+                            "3. desktop_control hotkey return — press Enter to SEND\n"
+                            "4. desktop_control screenshot — confirm message was sent\n"
+                            "DO NOT answer. Execute these steps NOW."
+                        )
+                    elif has_msg_typed and not has_send:
+                        reject_msg = (
+                            "[SYSTEM] You typed the message but did NOT press Enter to send it. "
+                            "Execute NOW: desktop_control hotkey return — then screenshot to confirm."
+                        )
+                    else:
+                        reject_msg = (
+                            "[SYSTEM] Your answer claims you completed the task, but action history "
+                            "shows you did NOT actually perform the required operations. "
+                            "For desktop messaging: you MUST (1) screenshot to see the current UI, "
+                            "(2) type <message> in the chat input, (3) hotkey return to send. "
+                            "DO NOT answer again — take action NOW."
+                        )
+                    history.append({"role": "user", "content": reject_msg})
                     continue
 
                 Output.phase("任务完成")
