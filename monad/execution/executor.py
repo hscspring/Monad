@@ -11,6 +11,7 @@ from monad.tools.python_exec import run as python_exec_run
 from monad.tools.shell import run as shell_run
 from monad.tools.web_fetch import run as web_fetch_run
 from monad.tools.ask_user import run as ask_user_run
+from monad.tools.desktop_control import run as desktop_control_run
 
 
 class Executor:
@@ -22,6 +23,7 @@ class Executor:
             "shell": shell_run,
             "web_fetch": web_fetch_run,
             "ask_user": ask_user_run,
+            "desktop_control": desktop_control_run,
         }
 
     def execute(self, capability: str, **params) -> str:
@@ -56,7 +58,7 @@ class Executor:
         """Try to execute a learned skill.
 
         Searches both the bundled package skills and the user's
-        ~/.monad/knowledge/skills/ directory. MONAD's 4 basic tool
+        ~/.monad/knowledge/skills/ directory. MONAD's basic tool
         functions are injected into the skill module so that skill
         code can call web_fetch(), shell(), python_exec() directly.
         """

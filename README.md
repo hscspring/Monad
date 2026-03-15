@@ -10,7 +10,7 @@
   </p>
   
   <p>
-    <img src="https://img.shields.io/badge/-Python_3.12-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python">
+    <img src="https://img.shields.io/badge/-Python_3.10+-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python">
     <img src="https://img.shields.io/badge/-OpenAI_API-412991?style=for-the-badge&logo=openai&logoColor=white" alt="OpenAI API">
     <img src="https://img.shields.io/badge/-ReAct_Agent-FF6F00?style=for-the-badge" alt="ReAct Agent">
   </p>
@@ -30,7 +30,7 @@ Instead, it **autonomously learns** how to complete your tasks by writing and ex
 
 *   **File System as Database:** The system itself has no memory of past sessions. It persists all learned information (axioms, environment knowledge, learned skills, user context, and experiences) directly to local Markdown files. No vector databases, no RAG, zero external dependencies.
 *   **Absolute Rationality:** MONAD follows a strict reasoning loop (`Analyze → Self-check → Learn → Execute → Reflect`) to accomplish goals logically.
-*   **Self-Learning & Self-Evolving:** Instead of shipping with 100 tools, MONAD ships with only 4 basic instincts (hands 🤲, voice 🗣️, eyes 👁️, dialogue 💬). It learns everything else by generating code.
+*   **Self-Learning & Self-Evolving:** Instead of shipping with 100 tools, MONAD ships with only 5 basic instincts (hands 🤲, voice 🗣️, eyes 👁️, dialogue 💬, screen 🖥️). It learns everything else by generating code.
 *   **LLM as a Command Executor:** The LLM's own training data is disregarded. All factual information must be retrieved from the real world via code execution or web perception.
 *   **Stateless Message Management:** Every user request starts with a fresh, clean message context. MONAD doesn't rely on LLM Chat History; instead, it persists vital information via reflection loops. This ensures reasoning purity and prevents hallucination buildup from long conversations.
 *   **Search First, Ask Later:** When stuck during execution (errors, missing packages, unfamiliar tools), MONAD's first instinct is to search the web via `web_fetch`, never to guess. But if the user's intent is unclear, MONAD asks the user first. In short: **unclear query → ask user; execution problem → search first**.
@@ -44,7 +44,7 @@ Instead, it **autonomously learns** how to complete your tasks by writing and ex
 
 ## ⚡ Basic Capabilities ("Instincts")
 
-MONAD comes with only four built-in capabilities:
+MONAD comes with five built-in capabilities:
 
 | Capability | Metaphor | Description |
 | :--- | :--- | :--- |
@@ -52,6 +52,9 @@ MONAD comes with only four built-in capabilities:
 | 💻 `shell` | Voice 🗣️ | Execute shell commands on the host operating system. |
 | 👁️ `web_fetch` | Eyes 👁️ | Perceive the internet directly. Fetch web pages with 3 modes: fast (HTTP), stealth (anti-bot), browser (JS render). Powered by Scrapling. |
 | 🙋 `ask_user` | Dialogue 💬 | Ask the user for clarification when it truly cannot proceed independently. |
+| 🖥️ `desktop_control` | Screen 🖥️ | Control any desktop application via screenshot + OCR + keyboard/mouse. Cross-platform (macOS/Windows/Linux). |
+
+> **Note:** `desktop_control` requires optional dependencies: `pip install monad-core[desktop]`
 
 ---
 
@@ -75,7 +78,7 @@ knowledge/
 │   ├── pending.jsonl            # Short-term: all recent experiences (staging area)
 │   └── accumulated_experiences.md  # Long-term: promoted high-frequency patterns
 ├── protocols/       # Error handling protocols
-└── tools/           # Documentation for the 4 basic capabilities
+└── tools/           # Documentation for the 5 basic capabilities
 ```
 
 ---
@@ -108,11 +111,19 @@ MONAD intentionally discards traditional "Chat History" in favor of a **Stateles
 pip install monad-core
 ```
 
-*Alternatively, install from source:*
+*Optional extras:*
+```bash
+pip install monad-core[desktop]   # Desktop control (screenshot + OCR + keyboard/mouse)
+pip install monad-core[feishu]    # Feishu (Lark) bot integration
+pip install monad-core[all]       # Everything
+```
+
+*Or install from source:*
 ```bash
 git clone https://github.com/hscspring/Monad.git
 cd Monad
-pip install -e .
+pip install -e .            # core only
+pip install -e ".[all]"     # with all extras
 ```
 
 **2. Configure your LLM**

@@ -26,6 +26,11 @@ class TestCapabilityRouting:
         assert "shell" in names
         assert "web_fetch" in names
         assert "ask_user" in names
+        assert "desktop_control" in names
+
+    def test_desktop_control_routes(self, executor):
+        result = executor.execute("desktop_control", action="wait 0.01")
+        assert "Waited" in result
 
     def test_python_exec_routes(self, executor):
         assert "routed" in executor.execute("python_exec", code='print("routed")')

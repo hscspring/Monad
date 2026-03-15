@@ -10,6 +10,7 @@ This is the brain of MONAD. Every step is printed so the user can see the proces
 
 import json
 import os
+import platform
 import re
 from monad.core.llm import llm_call
 from monad.knowledge.vault import KnowledgeVault
@@ -33,7 +34,15 @@ _THOUGHT_HISTORY_CAP = 400
 _HISTORY_CAP = 30
 
 
-REASONER_SYSTEM = """You are MONAD, a rational autonomous agent.
+_PLATFORM_INFO = f"""## 当前运行环境
+
+- OS: {platform.system()} {platform.release()} ({platform.machine()})
+- Shell: {"PowerShell/cmd" if platform.system() == "Windows" else "bash/zsh"}
+- 路径分隔符: {"反斜杠 \\\\" if platform.system() == "Windows" else "/"}
+- 使用 shell 能力时，必须生成当前操作系统对应的命令（例如 Windows 上用 dir 而非 ls，用 type 而非 cat）。
+"""
+
+REASONER_SYSTEM = _PLATFORM_INFO + """You are MONAD, a rational autonomous agent.
 
 ## ⚠️ 最高原则（绝对不可违反）
 
@@ -50,7 +59,7 @@ REASONER_SYSTEM = """You are MONAD, a rational autonomous agent.
 正确示范：用户问今天的新闻 → 你用 web_fetch 抓取新闻网站 → 整理后回答 ✅
 正确示范：遇到报错 → 先搜索这个错误信息 → 根据搜索结果修复 ✅
 
-## 你的基础能力（4个"本能"）
+## 你的基础能力（5个"本能"）
 
 1. **python_exec**: 执行 Python 代码。你的"手"🤲——通过它你可以：
    - 处理数据、计算、分析
@@ -70,6 +79,37 @@ REASONER_SYSTEM = """You are MONAD, a rational autonomous agent.
    - **不要手动指定 mode 参数**，默认的 auto 模式已经能处理所有情况
 
 4. **ask_user**: 确实无法独立完成时，向用户求助。你的"对话"💬。
+
+5. **desktop_control**: 操控桌面应用程序。你的"双手操控屏幕"🖥️：
+   - 通过截屏 + OCR 识别界面上的文字元素及坐标，再模拟键鼠操作
+   - **action 参数必须是一个完整字符串**，不要拆成多个参数。例如：`{"action": "click 搜索"}` ✅，不是 `{"action": "click", "text": "搜索"}` ❌
+   - 用法（action 参数）：
+     - `activate <应用名>`: **首先使用**——把目标应用切到前台（如 `activate Lark`）。不 activate 就 screenshot 只会看到当前前台窗口。
+     - `screenshot`: 截屏并 OCR，返回当前屏幕上所有可见文字元素及其坐标
+     - `click <文字>`: 点击屏幕上包含指定文字的元素
+     - `double_click <文字>`: 双击匹配的元素
+     - `click_xy <x> <y>`: 点击精确坐标（当 OCR 无法匹配时使用）
+     - `type <文字>`: 用键盘输入文字
+     - `hotkey <key1> <key2>`: 按快捷键（如 `hotkey cmd space`、`hotkey ctrl a`）
+     - `find <文字>`: 检查某个文字是否出现在屏幕上
+     - `wait <秒>`: 等待界面更新
+   - **标准使用流程**：
+     1. `shell: open -a "AppName"` 打开应用
+     2. `desktop_control: activate AppName` 确保应用在前台
+     3. `desktop_control: wait 2` 等待界面加载
+     4. `desktop_control: screenshot` 看到界面元素
+     5. `desktop_control: click <目标>` / `type <内容>` 操作
+     6. `desktop_control: screenshot` 确认结果
+   - ⚠️ **重要注意事项**：
+     - screenshot 是**全屏截图**，会同时看到前台和后台窗口的文字。必须根据 `[Frontmost app: XXX]` 标签确认你看到的是目标应用，而非其他窗口的内容。
+     - **只有 click/type/hotkey 才是真正的交互操作**。仅 screenshot 不代表你做了任何事。任务要求你"点击"或"发消息"时，你必须实际执行 click/type 动作。
+     - 每次操作后只做一次 screenshot 确认，不要重复截图。一次操作不成功就换方法，不要重试同样的操作。
+     - 不要把屏幕上看到的历史文字（如之前执行的日志）当作当前任务的结果。
+     - **搜索场景的 click 陷阱**：在搜索框输入关键词后，OCR 会同时看到搜索框里的输入文字和下方的搜索结果。如果 click 返回了 "Also matched: ..." 替代项，说明有多个匹配。**优先点击搜索结果列表中带上下文的选项**（如 `click 问一问：百合` 而非 `click 百合`），因为搜索框里的文字点了不会跳转。如果 click 后界面没变化，立刻尝试 "Also matched" 中的替代目标。
+     - **搜索结果可见时直接点击**：如果 screenshot 后看到搜索结果中已经有目标联系人/项目（如 "百合"、"问一问：百合"），**直接点击该搜索结果进入**，不要先点其他导航/分类标签（如 "消息"）再去找，那样会跳出搜索页面导致目标消失。
+     - **同名元素有多个位置**：UI 中同一文字可能出现在多个位置（导航栏、侧边栏、搜索分类等）。当 click 返回 "Also matched" 或 "WARNING: N elements match"，仔细看坐标，用 `click_xy <x> <y>` 精确点击你真正想要的那个。
+     - **发消息必须完成全流程**：找到联系人 → 点击进入聊天 → `type <消息内容>` 输入文字 → 发送（Enter 或点击发送按钮）。缺少 `type` 步骤 = 消息没发出去。
+     - **聊天可能已经打开**：如果 screenshot 显示联系人名字出现在窗口顶部（y 坐标很小），这是聊天窗口的标题栏——说明**这个聊天已经打开了**。不需要再搜索或点击联系人，直接 `type <消息>` 输入消息然后 `hotkey return` 发送即可。反复点击标题栏上的名字不会有任何效果。
 
 你还有已学会的技能（skills），优先使用已有技能。
 
@@ -237,6 +277,9 @@ class Reasoner:
         actions = []
         consecutive_thoughts = 0
         consecutive_ask_user = 0
+        _recent_action_sigs = []  # tracks action signatures for loop detection
+        _click_target_counts = {}  # tracks click target repetitions across turns
+        _active_app = None  # tracks the last successfully activated app
 
         for turn in range(MAX_TURNS):
             Output.phase(f"Reasoning Turn {turn + 1}/{MAX_TURNS}")
@@ -335,6 +378,93 @@ class Reasoner:
                     consecutive_ask_user = 0
 
                 actions.append({"capability": capability, "params": params})
+
+                # --- Action loop detection ---
+                action_sig = f"{capability}:{json.dumps(params, sort_keys=True, ensure_ascii=False)}"
+                _recent_action_sigs.append(action_sig)
+                if len(_recent_action_sigs) >= 3 and len(set(_recent_action_sigs[-3:])) == 1:
+                    stuck_action = params.get("action", "") or params.get("command", "")
+                    is_app_launch_loop = (
+                        "open -a" in stuck_action or "activate" in stuck_action.lower()
+                        or capability == "shell" and "open -a" in params.get("command", "")
+                    )
+
+                    if is_app_launch_loop and execute_fn:
+                        Output.warn(f"检测到重复动作 ({capability})，自动执行 screenshot 推进流程")
+                        history.append({"role": "assistant", "content": raw_response})
+                        auto_result = execute_fn("desktop_control", action="screenshot")
+                        Output.action("desktop_control", "[自动] 截屏以推进流程")
+                        Output.observation(auto_result[:500] if len(auto_result) > 500 else auto_result)
+                        hint = self._action_hint("desktop_control", {"action": "screenshot"}, auto_result)
+                        if hint:
+                            auto_result += "\n" + hint
+                        history.append({"role": "user", "content":
+                            f"[SYSTEM] You were stuck repeating '{stuck_action}'. The app IS already open. "
+                            f"I auto-executed screenshot for you. Here are the current screen elements:\n\n"
+                            f"Observation from desktop_control:\n{auto_result}\n\n"
+                            f"Now use click <text> to click a UI element, or type <text> to enter text. "
+                            f"Do NOT run open/activate again."
+                        })
+                        _recent_action_sigs.clear()
+                    else:
+                        Output.warn(f"检测到重复动作 ({capability})，强制切换策略")
+                        history.append({"role": "assistant", "content": raw_response})
+                        history.append({"role": "user", "content":
+                            f"[SYSTEM] STOP. You executed '{capability}' with the same parameters "
+                            f"3 times in a row. This is not working. "
+                            f"You MUST try a COMPLETELY DIFFERENT approach now."
+                        })
+                    continue
+
+                # --- Click-target loop detection (across non-consecutive turns) ---
+                if capability == "desktop_control":
+                    action_str = params.get("action", "")
+                    if action_str.startswith("click "):
+                        click_target = action_str[6:].strip()
+                        _click_target_counts[click_target] = _click_target_counts.get(click_target, 0) + 1
+                        if _click_target_counts[click_target] >= 3:
+                            Output.warn(f'检测到重复点击 "{click_target}" {_click_target_counts[click_target]} 次，强制换策略')
+                            history.append({"role": "assistant", "content": raw_response})
+                            history.append({"role": "user", "content":
+                                f'[SYSTEM] STOP. You have clicked "{click_target}" {_click_target_counts[click_target]} times '
+                                f'but the UI has not changed. This means you are clicking the WRONG element '
+                                f'(likely the search input text, not a search result). '
+                                f'Try one of these:\n'
+                                f'1. Click a more specific element with context (e.g. click the full search result text, not the short keyword)\n'
+                                f'2. Use click_xy with coordinates of the actual search result below the input\n'
+                                f'3. Press Enter/Return to confirm the search, then screenshot to see results\n'
+                                f'4. Use hotkey to navigate (e.g. hotkey down, then hotkey enter)'
+                            })
+                            continue
+
+                # --- Intercept redundant 'open -a' when app already active ---
+                import re as _re_loop
+                if capability == "shell" and _active_app and execute_fn:
+                    shell_cmd = params.get("command", "")
+                    m_open = _re_loop.search(r'open\s+-a\s+["\']?(\w+)', shell_cmd)
+                    if m_open:
+                        from monad.tools.desktop_control import _is_same_app
+                        requested_app = m_open.group(1)
+                        if _is_same_app(requested_app, _active_app):
+                            Output.warn(f'"{_active_app}" 已在前台，跳过重复 open，自动截屏')
+                            history.append({"role": "assistant", "content": raw_response})
+                            auto_result = execute_fn("desktop_control", action="screenshot")
+                            Output.action("desktop_control", "[自动] 截屏替代重复 open")
+                            Output.observation(auto_result[:500] if len(auto_result) > 500 else auto_result)
+                            hint = self._action_hint("desktop_control", {"action": "screenshot"}, auto_result)
+                            if hint:
+                                auto_result += "\n" + hint
+                            history.append({"role": "user", "content":
+                                f'[SYSTEM] "{_active_app}" is ALREADY open and in the foreground. '
+                                f'Do NOT run "open -a" or "activate" again. '
+                                f'I auto-executed screenshot for you:\n\n'
+                                f'Observation from desktop_control:\n{auto_result}\n\n'
+                                f'Now interact with the UI: use click <text>, type <text>, '
+                                f'hotkey cmd k (to search contacts), etc.'
+                            })
+                            _recent_action_sigs.clear()
+                            continue
+
                 history.append({"role": "assistant", "content": raw_response})
 
                 # Show what action is being taken
@@ -368,11 +498,30 @@ class Reasoner:
                 # Show observation
                 Output.observation(result[:500] if len(result) > 500 else result)
 
+                # Track active app from successful activate or open -a
+                if capability == "desktop_control":
+                    act_str = params.get("action", "")
+                    if act_str.startswith("activate") and ("verified" in result or "foreground" in result):
+                        app_name = act_str.split(None, 1)[1].strip() if " " in act_str else ""
+                        if app_name:
+                            _active_app = app_name
+                elif capability == "shell" and not _active_app:
+                    shell_cmd = params.get("command", "")
+                    import re as _re_track
+                    m_track = _re_track.search(r'open\s+-a\s+["\']?(\w+)', shell_cmd)
+                    if m_track and "error" not in result.lower() and "unable" not in result.lower():
+                        _active_app = m_track.group(1)
+
                 # Post-action verification for skill/file creation
                 verification = self._verify_action(capability, params, result)
                 if verification:
                     result = result + "\n" + verification
                     Output.observation(f"[验证] {verification}")
+
+                # Smart hint: guide LLM to next step after opening an app
+                hint = self._action_hint(capability, params, result)
+                if hint:
+                    result = result + "\n" + hint
 
                 # Feed back to LLM
                 observation = f"Observation from {capability}:\n{result}"
@@ -383,14 +532,17 @@ class Reasoner:
                 # Guard: reject hollow answers that claim creation
                 # without actual write actions
                 if self._is_hollow_answer(user_input, actions):
-                    Output.warn("检测到空洞回答：声称完成创建但未实际执行写入操作，强制要求执行")
+                    Output.warn("检测到空洞回答：声称完成操作但未实际执行，强制要求执行")
                     history.append({"role": "assistant", "content": raw_response})
                     history.append({"role": "user", "content":
-                        "[SYSTEM] Your answer claims you created/installed/saved something, "
-                        "but you did NOT execute any python_exec or shell action that writes files. "
-                        "Checking if files exist is NOT creating them. "
-                        "You MUST actually execute code to create the files. "
-                        "Do NOT answer again until you have performed the write actions."
+                        "[SYSTEM] Your answer claims you completed the task, but action history "
+                        "shows you did NOT actually perform the required operations. "
+                        "For file tasks: you must execute python_exec/shell to write files. "
+                        "For desktop tasks: you must execute desktop_control click/type/hotkey "
+                        "to interact with the UI — screenshot alone is NOT interaction. "
+                        "For messaging tasks: you MUST use 'type <message>' to actually input "
+                        "the message text, then send it. click alone does NOT send a message. "
+                        "Do NOT answer again until you have ACTUALLY performed the actions."
                     })
                     continue
 
@@ -469,6 +621,59 @@ class Reasoner:
         return "\n\n".join(sections)
 
     @staticmethod
+    def _action_hint(capability: str, params: dict, result: str) -> str:
+        """Generate contextual hints to guide the LLM to the next logical step."""
+        import re as _re
+        if capability == "shell":
+            cmd = params.get("command", "")
+            m = _re.search(r'open\s+-a\s+["\']?(\w+)', cmd)
+            if m and "error" not in result.lower() and "unable" not in result.lower():
+                app_name = m.group(1)
+                return (
+                    f"[Hint: '{app_name}' has been opened. Your next steps should be: "
+                    f'1) desktop_control activate {app_name} — to bring it to foreground, '
+                    f'2) desktop_control wait 2 — let UI load, '
+                    f'3) desktop_control screenshot — to see the UI elements. '
+                    f'Do NOT run open -a again.]'
+                )
+        if capability == "desktop_control":
+            action = params.get("action", "")
+            if action.startswith("activate") and "foreground" in result.lower():
+                if "Auto-screenshot" in result:
+                    hint = (
+                        "[Hint: App is in foreground and UI elements are shown above. "
+                        "Use click/type/hotkey to interact NOW. Do NOT run open/activate/screenshot again."
+                    )
+                    if "Feishu" in result or "Lark" in result or "WeChat" in result or "微信" in result:
+                        hint += " To search for a contact: hotkey cmd k"
+                    hint += "]"
+                    return hint
+                return (
+                    "[Hint: App is now in foreground. Next: desktop_control screenshot "
+                    "to see UI elements, then click/type to interact.]"
+                )
+            if action == "screenshot" and "UI elements" in result:
+                hint = (
+                    "[Hint: You can now see the screen. Use click <text> to click a button, "
+                    "type <text> to enter text, or hotkey to press keys. "
+                    "Do NOT take another screenshot until you've performed an action."
+                )
+                if "搜索" not in result and ("Feishu" in result or "Lark" in result or "WeChat" in result or "微信" in result):
+                    hint += (
+                        " To search for a contact/chat in this app: use 'hotkey cmd k' "
+                        "(NOT 'click 搜索' — the search button may not be visible as text)."
+                    )
+                hint += "]"
+                return hint
+            if action.startswith("click") and "Also matched:" in result:
+                return (
+                    "[Hint: Multiple elements matched your click target. If the clicked element "
+                    "was a search input (not a result), the UI won't change. Check the 'Also matched' "
+                    "alternatives and try clicking one with more context text (e.g. a search result item).]"
+                )
+        return ""
+
+    @staticmethod
     def _verify_action(capability: str, params: dict, result: str) -> str:
         """Verify file-creation actions actually produced the expected artifacts."""
         if capability not in ("python_exec", "shell"):
@@ -499,31 +704,68 @@ class Reasoner:
 
     @staticmethod
     def _is_hollow_answer(user_input: str, actions: list) -> bool:
-        """Detect answers that claim creation without actual write actions.
+        """Detect answers that claim creation/action without actual execution.
 
         Returns True when the user's request implies creating/saving something
-        but the action history contains no python_exec or shell write commands.
+        but the action history contains no python_exec or shell write commands,
+        OR when the task implies desktop GUI interaction but no click/type/hotkey
+        actions were actually performed.
         """
+        task_lower = user_input.lower()
+
+        # --- Check 1: Creation tasks need write actions ---
         creation_keywords = ["创建", "生成", "保存", "安装", "学习", "制作",
                              "写入", "install", "create", "save", "build"]
-        task_lower = user_input.lower()
-        if not any(kw in task_lower for kw in creation_keywords):
-            return False
+        if any(kw in task_lower for kw in creation_keywords):
+            write_indicators = ["open(", "write(", "makedirs", "mkdir",
+                                "pip install", "save_", "> ", ">>",
+                                "with open", "write_text"]
+            for action in actions:
+                cap = action.get("capability", "")
+                if cap not in ("python_exec", "shell"):
+                    continue
+                code = action.get("params", {}).get("code", "")
+                cmd = action.get("params", {}).get("command", "")
+                payload = code + cmd
+                if any(w in payload for w in write_indicators):
+                    break
+            else:
+                return True
 
-        write_indicators = ["open(", "write(", "makedirs", "mkdir",
-                            "pip install", "save_", "> ", ">>",
-                            "with open", "write_text"]
-        for action in actions:
-            cap = action.get("capability", "")
-            if cap not in ("python_exec", "shell"):
-                continue
-            code = action.get("params", {}).get("code", "")
-            cmd = action.get("params", {}).get("command", "")
-            payload = code + cmd
-            if any(w in payload for w in write_indicators):
-                return False
+        # --- Check 2: Desktop interaction tasks need click/type/hotkey ---
+        desktop_keywords = ["打开", "点击", "发消息", "发送", "输入", "操作",
+                            "给.*发", "click", "type", "send", "open.*app"]
+        import re
+        if any(re.search(kw, task_lower) for kw in desktop_keywords):
+            interaction_actions = {"click", "double_click", "click_xy", "type", "hotkey"}
+            for action in actions:
+                if action.get("capability") != "desktop_control":
+                    continue
+                act_str = action.get("params", {}).get("action", "")
+                cmd = act_str.strip().split(None, 1)[0].lower() if act_str.strip() else ""
+                if cmd in interaction_actions:
+                    break
+            else:
+                return True
 
-        return True
+        # --- Check 3: Messaging tasks specifically require type action ---
+        messaging_keywords = ["发消息", "发信息", "发个消息", "发送消息",
+                              "给.*发.*消息", "给.*说", "告诉.*", "问.*",
+                              "send.*message", "send.*msg"]
+        if any(re.search(kw, task_lower) for kw in messaging_keywords):
+            has_type = False
+            for action in actions:
+                if action.get("capability") != "desktop_control":
+                    continue
+                act_str = action.get("params", {}).get("action", "")
+                cmd = act_str.strip().split(None, 1)[0].lower() if act_str.strip() else ""
+                if cmd == "type":
+                    has_type = True
+                    break
+            if not has_type:
+                return True
+
+        return False
 
     @staticmethod
     def _thought_similarity(a: str, b: str) -> float:

@@ -229,3 +229,45 @@ class TestKnowledgeLoading:
         content = path.read_text(encoding="utf-8")
         assert "task" in content
         assert "note" in content
+
+    def test_load_environment(self, vault):
+        env_dir = vault.config.environment_path
+        env_dir.mkdir(parents=True, exist_ok=True)
+        (env_dir / "internet.md").write_text("Search engines list", encoding="utf-8")
+        result = vault.load_environment()
+        assert "Search engines" in result
+
+    def test_load_environment_empty(self, vault):
+        assert vault.load_environment() == ""
+
+    def test_load_tools_docs(self, vault):
+        tools_dir = vault.config.tools_docs_path
+        tools_dir.mkdir(parents=True, exist_ok=True)
+        (tools_dir / "shell.md").write_text("Execute shell commands", encoding="utf-8")
+        (tools_dir / "desktop_control.md").write_text("Control desktop apps", encoding="utf-8")
+        result = vault.load_tools_docs()
+        assert "shell" in result.lower()
+        assert "desktop" in result.lower()
+
+    def test_load_tools_docs_empty(self, vault):
+        assert vault.load_tools_docs() == ""
+
+    def test_load_protocols(self, vault):
+        proto_dir = vault.config.protocols_path
+        proto_dir.mkdir(parents=True, exist_ok=True)
+        (proto_dir / "error_handling.md").write_text("Retry on failure", encoding="utf-8")
+        result = vault.load_protocols()
+        assert "Retry" in result
+
+    def test_load_protocols_empty(self, vault):
+        assert vault.load_protocols() == ""
+
+    def test_load_user_context(self, vault):
+        user_dir = vault.config.user_path
+        user_dir.mkdir(parents=True, exist_ok=True)
+        (user_dir / "facts.md").write_text("Prefers Python", encoding="utf-8")
+        result = vault.load_user_context()
+        assert "Python" in result
+
+    def test_load_user_context_empty(self, vault):
+        assert vault.load_user_context() == ""

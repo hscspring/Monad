@@ -18,12 +18,12 @@ class TestWebFetchExplicitModes(unittest.TestCase):
         self.assertIn("Herman Melville", result)
 
     def test_browser_mode(self):
-        result = run(url='https://example.com', mode='browser', timeout=15)
-        self.assertIn("Example Domain", result)
+        result = run(url='https://www.baidu.com', mode='browser', timeout=15)
+        self.assertIn("百度", result)
 
     def test_browser_mode_selector(self):
-        result = run(url='https://example.com', mode='browser', selector='h1', timeout=15)
-        self.assertIn("Example Domain", result)
+        result = run(url='https://www.baidu.com', mode='browser', selector='title', timeout=15)
+        self.assertIn("百度", result)
 
 
 class TestWebFetchAutoMode(unittest.TestCase):

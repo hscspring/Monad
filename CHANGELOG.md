@@ -2,6 +2,31 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.0] - 2026-03-15
+
+### Added
+- **Capability: desktop_control**: New 5th built-in capability for controlling any desktop application via screenshot + OCR + keyboard/mouse input. Lightweight, cross-platform stack: `mss` (screenshot), `rapidocr-onnxruntime` (OCR), `pynput` (input). The LLM only sees text (OCR results with coordinates), never images. Actions: `screenshot`, `click`, `type`, `hotkey`, `find`, `click_xy`, `double_click`, `wait`, `activate`. Optional install: `pip install monad-core[desktop]`.
+- **desktop_control `activate` action**: Brings target app to foreground via `osascript` (macOS) or PowerShell (Windows), waits 1.5s, verifies frontmost app, then **auto-screenshots** the active window so the LLM immediately sees current UI elements without a separate screenshot step.
+- **Window-scoped screenshot (macOS)**: Uses `screencapture -l <windowID>` to capture only the frontmost app's window, even if occluded. Eliminates terminal log noise from OCR results.
+- **Retina coordinate scaling**: `_adjust_coords_to_screen()` converts OCR pixel coordinates from 2x Retina screenshots back to logical screen points, offset by window position, for accurate `pynput` clicks.
+- **OCR noise filtering**: `_filter_elements()` removes garbled, short, or low-confidence OCR fragments. `_is_self_noise()` specifically strips MONAD's own terminal log output from screenshots.
+- **App alias matching**: `_APP_ALIASES` + `_is_same_app()` maps Lark↔Feishu, WeChat↔Weixin, etc. for robust foreground verification.
+- **Smart element matching**: `_find_all_matches()` disambiguates duplicate text (e.g. search input vs search result). With exactly 2 exact matches, prefers the lower-y element (search result below input). Reports all `Also matched` alternatives in click response so LLM can use `click_xy` for precision.
+- **Header-area click hint**: When clicking an element at `y < 60` (window title bar), response warns that the chat/window may already be open and suggests `type <message>` directly.
+- **Optional dependency group `[all]`**: `pip install monad-core[all]` installs all optional extras (feishu + desktop).
+- **Platform-aware Reasoner**: System prompt dynamically injects OS/arch/shell info at startup. LLM generates platform-correct commands (e.g. `dir` on Windows, `ls` on Unix).
+- **Comprehensive Test Suite Expansion**: 141 new tests (109 → 250 total) covering desktop_control, config, skill_builder, llm, loop, ask_user, and expanded coverage for executor, reasoner, and vault.
+
+### Fixed
+- **Reasoner: action loop detection**: Tracks last 3 action signatures. When 3 consecutive identical `open -a` or `activate` actions are detected, automatically executes `desktop_control screenshot` and injects UI elements into context to break the loop.
+- **Reasoner: click-target loop detection**: Counts per-target click frequency across non-consecutive turns. After 3 clicks on the same text with no UI change, injects corrective prompt suggesting `click_xy`, `hotkey enter`, or keyboard navigation.
+- **Reasoner: redundant `open -a` interception**: Tracks `_active_app`; if LLM calls `open -a <same_app>` when app is already confirmed in foreground, intercepts the shell call, auto-screenshots instead, and injects "[SYSTEM] App is ALREADY open" message.
+- **Reasoner: hollow answer guard for messaging tasks**: Extends the hollow answer check — tasks matching "发消息/给…发/问…" patterns require a `type` action (not just `click`) before the answer is accepted. Prevents LLM from claiming "message sent" without having typed anything.
+- **Reasoner: smart action hints**: After `shell open -a`, suggests `activate` → `screenshot`. After `activate`, includes `hotkey cmd k` hint for messaging apps. After `screenshot` on Feishu/WeChat, suggests `hotkey cmd k` when no search box is visible as text.
+- **desktop_control: kwarg merging**: `run()` now correctly merges `text=`, `keys=`, `x=`, `y=` kwargs into the action string, fixing LLM calls like `{"action": "click", "text": "target"}`.
+- **Cross-platform publish_to_xhs**: `Meta+A` → dynamic `SELECT_ALL_KEY` (macOS/Windows), PATH separator `:` → `os.pathsep`, NVM path lookup supports Windows `%APPDATA%\nvm`, mmdc lookup handles `.cmd` extension on Windows.
+- **web_fetch browser tests**: Replaced `example.com` (flaky) with `baidu.com` for reliable browser mode test assertions.
+
 ## [0.3.2] - 2026-03-13
 
 ### Added
@@ -32,7 +57,7 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 - **Experience Save Flow**: `save_experience()` in `KnowledgeVault` now writes to `pending.jsonl` first, with automatic promotion and cluster cleanup logic.
-- **Skill Execution Path**: `Executor._try_skill()` now uses `CONFIG.skills_path` (always `~/.monad/knowledge/skills/`) instead of the package directory. MONAD's 4 tool functions (web_fetch, shell, python_exec, ask_user) are injected into skill modules at load time so skill code can call them directly.
+- **Skill Execution Path**: `Executor._try_skill()` now uses `CONFIG.skills_path` (always `~/.monad/knowledge/skills/`) instead of the package directory. MONAD's tool functions (web_fetch, shell, python_exec, ask_user) are injected into skill modules at load time so skill code can call them directly.
 - **Knowledge Sync**: Bundled knowledge is now incrementally synced to user workspace — new files from package updates are copied without overwriting user modifications.
 - **python_exec Globals**: `os`, `sys`, `web_fetch`, and `shell` are pre-injected into the execution namespace so LLM-generated code doesn't need to import them.
 - **MONAD_OUTPUT_DIR Prompt**: System prompt now explicitly shows the resolved path (`~/.monad/output/`) and a code example, preventing the LLM from treating the variable name as a literal path string.

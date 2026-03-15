@@ -6,7 +6,7 @@
 
 *   **文件系统即数据库：** 所有知识（公理、环境知识、技能、经验、用户记忆）全部以 Markdown 文件持久化在本地文件系统中。没有向量数据库，没有 RAG，没有任何外部依赖。
 *   **绝对理性：** MONAD 遵循严格的推理循环（分析 → 自检 → 学习 → 执行 → 反思）来达成目标。
-*   **自主学习：** 不预装 100 个工具，只有 4 个"本能"（手🤲、口令🗣️、眼👁️、对话💬）。其他一切能力都是 MONAD 通过写代码、执行代码来**自己学会**的。
+*   **自主学习：** 不预装 100 个工具，只有 5 个"本能"（手🤲、口令🗣️、眼👁️、对话💬、屏幕🖥️）。其他一切能力都是 MONAD 通过写代码、执行代码来**自己学会**的。
 *   **LLM = 高级指令执行器：** LLM 没有记忆，没有知识。所有事实性信息必须通过执行代码或感知互联网获取，绝不能依赖 LLM 自身的训练数据。
 *   **无状态消息管理（Stateless）：** 每次用户请求都是一个全新的、干净的消息上下文。MONAD 不依赖 LLM 的 Chat History，而是通过反思循环将关键信息持久化。这确保了推理的纯净性，防止了长对话带来的幻觉堆积。
 *   **万事不决先搜索：** 执行过程中遇到任何困难（报错、缺库、不知道怎么做），第一反应是用 `web_fetch` 搜索解决方案。但如果是用户意图不清晰，则必须先问用户。一句话：**query 不清楚 → 问用户；执行遇困难 → 先搜索**。
@@ -17,7 +17,7 @@
 *   **技能去重（复用优先）：** 创建新技能前，系统提示 LLM 先检查已有技能，优先修改而非新建。SkillBuilder 模块独立评估所有已有技能，支持三种操作：`skip`（跳过）、`update`（优先，修改已有）、`create`（新建）——防止技能库产生重复条目。
 
 
-## Basic Capabilities（4 个"本能"）
+## Basic Capabilities（5 个"本能"）
 
 | 能力 | 隐喻 | 说明 |
 |------|------|------|
@@ -25,6 +25,9 @@
 | `shell` | 口令 🗣️ | 执行 Shell 命令 |
 | `web_fetch` | 眼 👁️ | 感知互联网。直接看到网页内容，支持 fast/stealth/browser 三种模式（基于 Scrapling） |
 | `ask_user` | 对话 💬 | 确实无法独立完成时，向用户求助 |
+| `desktop_control` | 屏幕 🖥️ | 操控任意桌面应用程序。通过截屏 + OCR 识别界面元素，模拟键鼠操作，跨平台（macOS/Windows/Linux） |
+
+> **提示：** `desktop_control` 需要额外安装依赖：`pip install monad-core[desktop]`
 
 ## Knowledge Architecture
 
@@ -44,7 +47,7 @@ knowledge/
 │   ├── pending.jsonl            # 短期：所有近期经验（暂存区）
 │   └── accumulated_experiences.md  # 长期：高频模式晋升后的精华
 ├── protocols/       # 异常处理协议
-└── tools/           # 4 个基础能力的文档
+└── tools/           # 5 个基础能力的文档
 ```
 
 ### 分类化用户记忆（Categorized Memory）
@@ -100,11 +103,19 @@ MONAD/
 pip install monad-core
 ```
 
-*或者从源码自建：*
+*可选扩展：*
+```bash
+pip install monad-core[desktop]   # 桌面控制（截屏 + OCR + 键鼠模拟）
+pip install monad-core[feishu]    # 飞书机器人集成
+pip install monad-core[all]       # 全部安装
+```
+
+*或者从源码安装：*
 ```bash
 git clone https://github.com/hscspring/Monad.git
 cd Monad
-pip install -e .
+pip install -e .            # 仅核心
+pip install -e ".[all]"     # 含全部扩展
 ```
 
 **2. 配置模型**

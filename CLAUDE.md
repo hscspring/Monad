@@ -19,13 +19,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Anti-Hallucination Verification**: Post-action verification checks filesystem after skill creation actions. Hollow answer guard rejects answers claiming creation without actual write actions.
 - **Skill Deduplication (Reuse First)**: System prompt instructs LLM to check existing skills before creating new ones. SkillBuilder supports `skip`/`update`/`create` actions, preferring `update`.
 
-### Basic Capabilities (4 "Instincts")
+### Basic Capabilities (5 "Instincts")
 
-MONAD ships with only 4 built-in capabilities:
+MONAD ships with 5 built-in capabilities:
 1. **python_exec** - Execute arbitrary Python code
 2. **shell** - Execute shell commands
 3. **web_fetch** - Fetch web pages (3 modes: fast HTTP, stealth anti-bot, browser JS render)
 4. **ask_user** - Request clarification from user
+5. **desktop_control** - Control any desktop app via screenshot + OCR + keyboard/mouse (optional: `pip install monad-core[desktop]`)
 
 Everything else is learned by generating and executing code.
 
@@ -84,11 +85,12 @@ monad/
 ├── learning/
 │   ├── reflection.py   # Post-task experience summarization
 │   └── skill_builder.py # Auto-generates reusable skills
-├── tools/              # 4 basic capabilities
+├── tools/              # 5 basic capabilities
 │   ├── python_exec.py
 │   ├── shell.py
 │   ├── web_fetch.py
-│   └── ask_user.py
+│   ├── ask_user.py
+│   └── desktop_control.py
 └── interface/
     ├── web.py          # FastAPI web UI
     ├── feishu.py       # Feishu bot integration
@@ -110,7 +112,7 @@ knowledge/
 │   ├── pending.jsonl            # Short-term staging area
 │   └── accumulated_experiences.md  # Long-term promoted experiences
 ├── protocols/          # Error handling protocols
-├── tools/              # Documentation for 4 basic capabilities
+├── tools/              # Documentation for 5 basic capabilities
 ├── records/            # Full execution logs per task
 └── cache/              # Temporary task results
 ```
@@ -126,14 +128,15 @@ knowledge/
   - `{"type": "answer", "content": "final answer"}` - Task completion
 - Handles malformed JSON, truncated responses, XML tag leakage from certain models
 - System prompt enforces "Search First" principle, "Reuse First" for skills, and rationality rules
+- System prompt dynamically injects current OS/platform info so LLM generates platform-correct commands
 - Post-action verification: checks skill files exist after creation actions
 - Hollow answer guard: rejects answers claiming creation without write actions
 
 ### Executor (execution/executor.py)
 
-- Executes 4 basic capabilities
+- Executes 5 basic capabilities
 - Loads skills exclusively from `~/.monad/knowledge/skills/` (via `CONFIG.skills_path`)
-- Injects MONAD's 4 tool functions (`web_fetch`, `shell`, `python_exec`, `ask_user`) into skill modules at load time
+- Injects MONAD's tool functions (`web_fetch`, `shell`, `python_exec`, `ask_user`) into skill modules at load time
 - `python_exec` pre-injects `os`, `sys`, `web_fetch`, `shell`, `MONAD_OUTPUT_DIR` into execution namespace
 
 ### Learning Pipeline
@@ -153,7 +156,7 @@ knowledge/
 
 ### Adding New Capabilities
 
-Don't. MONAD learns by generating code, not by adding hardcoded tools. If you need to add a fundamental capability (like the 4 instincts), add it to `monad/tools/` and register in `executor.py`.
+Don't. MONAD learns by generating code, not by adding hardcoded tools. If you need to add a fundamental capability (like the 5 instincts), add it to `monad/tools/` and register in `executor.py`.
 
 ### Testing web_fetch
 
@@ -200,10 +203,16 @@ Edit files in `~/.monad/knowledge/` (primary) or bundled `monad/knowledge/` (syn
 - `axioms/` - Core behavioral principles
 - `environment/` - World facts (URLs, APIs)
 - `protocols/` - Error handling strategies
-- `skills/` - Reusable skills (built-in: web_to_markdown, parse_document, fetch_topic_news)
+- `skills/` - Reusable skills (built-in: web_to_markdown, parse_document, fetch_topic_news, publish_to_xhs, doc_to_knowledge_map)
+
+### Desktop Control
+Requires optional dependency: `pip install monad-core[desktop]`
 
 ### Feishu Integration
 Requires optional dependency: `pip install monad-core[feishu]`
+
+### Install Everything
+`pip install monad-core[all]`
 
 ## Important Notes
 
