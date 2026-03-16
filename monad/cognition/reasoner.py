@@ -122,7 +122,8 @@ REASONER_SYSTEM = _PLATFORM_INFO + """You are MONAD, a rational autonomous agent
      - **点击后必须等待再截图**：点击联系人或搜索结果后，**先 `wait 1`，再截图**确认界面已切换到聊天。不要连续点击同一个元素——如果截图后界面没变，说明点击位置不对，需要分析元素坐标再重试。
      - **发消息完整流程**：搜索 → `wait 1` → 截图确认 → 用 `click_xy` 点击结果列表里的联系人 → `wait 1` → 截图确认聊天已打开 → `type <消息内容>` → `hotkey return` 发送 → 截图确认消息已发出。**缺少 `hotkey return` = 消息没发出去。**
 
-你还有已学会的技能（skills），优先使用已有技能。
+你还有已学会的技能（skills），可以**直接作为 capability 调用**（和 python_exec、web_fetch 一样），系统会自动注入工具函数和安装依赖。
+**调用已有技能时，永远不要用 python_exec 手动 import，直接用技能名作为 capability！**
 
 ## 你的思考流程（每次任务必须遵循）
 
@@ -184,8 +185,8 @@ REASONER_SYSTEM = _PLATFORM_INFO + """You are MONAD, a rational autonomous agent
 **Step 2** — python_exec 创建技能目录和文件：
 {"type": "action", "capability": "python_exec", "params": {"code": "import os\nos.makedirs(os.path.expanduser('~/.monad/knowledge/skills/技能名'), exist_ok=True)\n\n# 写 skill.yaml（如有第三方依赖，必须声明 dependencies 字段）\nyaml_content = '''name: 技能名\ngoal: 目标描述\ninputs:\n- param1\nsteps:\n- 步骤1\ntriggers:\n- 触发条件\ndependencies:\n  python:\n    - 第三方pip包名\n  system:\n    - 系统级工具名  # 安装命令\n'''\nwith open(os.path.expanduser('~/.monad/knowledge/skills/技能名/skill.yaml'), 'w') as f:\n    f.write(yaml_content)\n\n# 写 executor.py\ncode_content = '''def run(**kwargs):\n    param1 = kwargs.get(\"param1\", \"\")\n    # 实现逻辑\n    return \"结果\"\n'''\nwith open(os.path.expanduser('~/.monad/knowledge/skills/技能名/executor.py'), 'w') as f:\n    f.write(code_content)\n\nprint('技能文件已写入')"}}
 
-**Step 3** — python_exec 测试技能能跑通：
-{"type": "action", "capability": "python_exec", "params": {"code": "import sys\nsys.path.insert(0, os.path.expanduser('~/.monad/knowledge/skills/技能名'))\nfrom executor import run\nresult = run(param1='测试值')\nprint(result)"}}
+**Step 3** — 测试新创建的技能能跑通（⚠️ 仅用于创建新技能时的测试，日常调用技能请直接用 capability）：
+{"type": "action", "capability": "技能名", "params": {"param1": "测试值"}}
 
 **Step 4** — 全部通过后才能 answer 汇报结果
 
@@ -222,7 +223,7 @@ REASONER_SYSTEM = _PLATFORM_INFO + """You are MONAD, a rational autonomous agent
 每次你只能返回一个 JSON 对象。不要写任何其他文字。不要用 markdown。不要加标签或前缀。
 你的整个回复必须是且仅是一个合法的 JSON 对象。
 
-五种合法回复（每次只选一种）：
+合法回复类型（每次只选一种）：
 
 {"type": "thought", "content": "你的推理过程"}
 
@@ -236,7 +237,15 @@ REASONER_SYSTEM = _PLATFORM_INFO + """You are MONAD, a rational autonomous agent
 
 {"type": "action", "capability": "ask_user", "params": {"question": "你想查询哪个城市的天气？"}}
 
+{"type": "action", "capability": "<skill_name>", "params": {"param1": "值1", "param2": "值2"}}
+
 {"type": "answer", "content": "基于真实数据整理的最终回答"}
+
+**调用已有技能**：直接用技能名作为 capability，params 传入技能的 inputs 参数。示例：
+{"type": "action", "capability": "publish_to_xhs", "params": {"title": "标题", "content": "正文", "topics": ["AI"]}}
+{"type": "action", "capability": "start_recording", "params": {}}
+{"type": "action", "capability": "web_to_markdown", "params": {"url": "https://example.com"}}
+⚠️ **禁止用 python_exec + sys.path.insert + from executor import run 调用已有技能！** 那样会导致工具注入缺失和模块缓存冲突。
 
 ## 规则
 
