@@ -48,7 +48,11 @@ def run(**kwargs):
         or soup.body
     )
     if not content_div:
-        return "Error: could not locate main content on the page"
+        # web_fetch may return plain text (not HTML) — use it directly
+        clean = re.sub(r"\n{3,}", "\n\n", html.strip())
+        if title:
+            clean = f"# {title}\n\n{clean}"
+        return clean
 
     parts = []
     if title:
