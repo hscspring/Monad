@@ -23,3 +23,9 @@ triggers:
 - 用户要求发布小红书笔记
 - 发布内容到小红书
 - 帮我发小红书
+dependencies:
+  python:
+    - doc2mermaid
+    - playwright
+  system:
+    - mmdc  # npm install -g @mermaid-js/mermaid-cli

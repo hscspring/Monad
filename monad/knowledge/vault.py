@@ -316,7 +316,8 @@ class KnowledgeVault:
                                 encoding="utf-8")
 
     def save_skill(self, name: str, goal: str, inputs: list, steps: list,
-                   code: str = "", triggers: list = None) -> Path:
+                   code: str = "", triggers: list = None,
+                   dependencies: dict = None) -> Path:
         """Save a new skill to the skill tree."""
         skill_dir = self.config.skills_path / name
         skill_dir.mkdir(parents=True, exist_ok=True)
@@ -329,6 +330,8 @@ class KnowledgeVault:
         }
         if triggers:
             skill_data["triggers"] = triggers
+        if dependencies:
+            skill_data["dependencies"] = dependencies
         yaml_path = skill_dir / "skill.yaml"
         yaml_path.write_text(yaml.dump(skill_data, allow_unicode=True, default_flow_style=False), encoding="utf-8")
 

@@ -7,3 +7,7 @@ steps:
 - Search for news about the topic using Bing or Google News
 - Parse the search results to extract article titles, sources, and URLs
 - Return formatted news results
+dependencies:
+  python:
+    - requests
+    - beautifulsoup4

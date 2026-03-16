@@ -107,7 +107,7 @@ knowledge/
 ├── user/               # User context (facts.md, mood.md, goals.md)
 ├── skills/             # Reusable skills (built-in + auto-generated)
 │   └── <skill_name>/
-│       ├── skill.yaml  # Metadata: name, goal, inputs, steps, triggers
+│       ├── skill.yaml  # Metadata: name, goal, inputs, steps, triggers, dependencies
 │       └── executor.py # Python implementation with run(**kwargs)
 ├── experiences/        # Two-tier experience memory
 │   ├── pending.jsonl            # Short-term staging area
@@ -175,7 +175,7 @@ All knowledge files are markdown. Use `KnowledgeVault` methods:
 - `vault.load_axioms()` - Load system principles
 - `vault.load_skills()` - Load available skills
 - `vault.load_all_context()` - Load everything for reasoning
-- `vault.save_skill(name, goal, inputs, steps, code)` - Save new skill
+- `vault.save_skill(name, goal, inputs, steps, code, dependencies={"python": [...], "system": [...]})` - Save new skill (dependencies auto-installed on execution)
 - `vault.save_experience(query, reflection, success, tags)` - Save task reflection (stages to pending.jsonl, auto-promotes)
 
 ### LLM Communication

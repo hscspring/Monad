@@ -11,3 +11,6 @@ triggers:
 - 用户上传了文件并要求解析或分析
 - 用户给出了文件路径并要求提取内容
 - 需要将 PDF/DOCX/PPTX 等文档转换为文本
+dependencies:
+  python:
+    - docling

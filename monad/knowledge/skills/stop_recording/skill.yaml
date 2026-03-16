@@ -10,3 +10,6 @@ steps:
 triggers:
   - 用户说"停止录屏"、"结束录制"、"stop recording"
   - 组合任务中所有步骤完成后的收尾步骤
+dependencies:
+  system:
+    - ffmpeg  # brew install ffmpeg

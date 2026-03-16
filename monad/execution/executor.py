@@ -4,9 +4,14 @@ Executes basic capabilities (python_exec, shell, web_fetch, ask_user) and learne
 """
 
 import importlib
+import subprocess
+import sys
 from pathlib import Path
 
+import yaml
+
 from monad.config import CONFIG
+from monad.interface.output import Output
 from monad.tools.python_exec import run as python_exec_run
 from monad.tools.shell import run as shell_run
 from monad.tools.web_fetch import run as web_fetch_run
@@ -61,10 +66,16 @@ class Executor:
         ~/.monad/knowledge/skills/ directory. MONAD's basic tool
         functions are injected into the skill module so that skill
         code can call web_fetch(), shell(), python_exec() directly.
+
+        If skill.yaml declares dependencies, they are auto-installed
+        before execution.
         """
-        executor_path = CONFIG.skills_path / skill_name / "executor.py"
+        skill_dir = CONFIG.skills_path / skill_name
+        executor_path = skill_dir / "executor.py"
         if not executor_path.exists():
             return None
+
+        self._ensure_skill_deps(skill_dir)
 
         try:
             spec = importlib.util.spec_from_file_location(f"skill_{skill_name}", executor_path)
@@ -84,6 +95,47 @@ class Executor:
                 return f"Skill '{skill_name}' has no run() function."
         except Exception as e:
             return f"Error running skill '{skill_name}': {str(e)}"
+
+    @staticmethod
+    def _ensure_skill_deps(skill_dir: Path) -> None:
+        """Auto-install Python dependencies declared in skill.yaml.
+
+        dependencies.python entries use pip package names (e.g. beautifulsoup4,
+        not bs4).  We check installation status via importlib.metadata which
+        works with pip names directly.
+        """
+        yaml_path = skill_dir / "skill.yaml"
+        if not yaml_path.exists():
+            return
+
+        try:
+            data = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
+        except Exception:
+            return
+
+        deps = data.get("dependencies", {})
+        py_deps = deps.get("python", [])
+        if not py_deps:
+            return
+
+        from importlib.metadata import distribution, PackageNotFoundError
+
+        missing = []
+        for dep in py_deps:
+            pkg_name = dep.split(">=")[0].split("==")[0].split("<")[0].split("[")[0].strip()
+            try:
+                distribution(pkg_name)
+            except PackageNotFoundError:
+                missing.append(dep)
+
+        if missing:
+            Output.system(f"正在安装 skill 依赖: {', '.join(missing)}")
+            subprocess.run(
+                [sys.executable, "-m", "pip", "install", "-q", *missing],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                timeout=120,
+            )
 
     @property
     def capability_names(self) -> list:

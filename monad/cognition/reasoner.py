@@ -182,7 +182,7 @@ REASONER_SYSTEM = _PLATFORM_INFO + """You are MONAD, a rational autonomous agent
 {"type": "action", "capability": "shell", "params": {"command": "pip install 库名"}}
 
 **Step 2** — python_exec 创建技能目录和文件：
-{"type": "action", "capability": "python_exec", "params": {"code": "import os\nos.makedirs(os.path.expanduser('~/.monad/knowledge/skills/技能名'), exist_ok=True)\n\n# 写 skill.yaml\nyaml_content = '''name: 技能名\ngoal: 目标描述\ninputs:\n- param1\nsteps:\n- 步骤1\ntriggers:\n- 触发条件\n'''\nwith open(os.path.expanduser('~/.monad/knowledge/skills/技能名/skill.yaml'), 'w') as f:\n    f.write(yaml_content)\n\n# 写 executor.py\ncode_content = '''def run(**kwargs):\n    param1 = kwargs.get(\"param1\", \"\")\n    # 实现逻辑\n    return \"结果\"\n'''\nwith open(os.path.expanduser('~/.monad/knowledge/skills/技能名/executor.py'), 'w') as f:\n    f.write(code_content)\n\nprint('技能文件已写入')"}}
+{"type": "action", "capability": "python_exec", "params": {"code": "import os\nos.makedirs(os.path.expanduser('~/.monad/knowledge/skills/技能名'), exist_ok=True)\n\n# 写 skill.yaml（如有第三方依赖，必须声明 dependencies 字段）\nyaml_content = '''name: 技能名\ngoal: 目标描述\ninputs:\n- param1\nsteps:\n- 步骤1\ntriggers:\n- 触发条件\ndependencies:\n  python:\n    - 第三方pip包名\n  system:\n    - 系统级工具名  # 安装命令\n'''\nwith open(os.path.expanduser('~/.monad/knowledge/skills/技能名/skill.yaml'), 'w') as f:\n    f.write(yaml_content)\n\n# 写 executor.py\ncode_content = '''def run(**kwargs):\n    param1 = kwargs.get(\"param1\", \"\")\n    # 实现逻辑\n    return \"结果\"\n'''\nwith open(os.path.expanduser('~/.monad/knowledge/skills/技能名/executor.py'), 'w') as f:\n    f.write(code_content)\n\nprint('技能文件已写入')"}}
 
 **Step 3** — python_exec 测试技能能跑通：
 {"type": "action", "capability": "python_exec", "params": {"code": "import sys\nsys.path.insert(0, os.path.expanduser('~/.monad/knowledge/skills/技能名'))\nfrom executor import run\nresult = run(param1='测试值')\nprint(result)"}}
@@ -192,13 +192,14 @@ REASONER_SYSTEM = _PLATFORM_INFO + """You are MONAD, a rational autonomous agent
 技能目录结构（必须严格遵循）：
 ```
 ~/.monad/knowledge/skills/<skill_name>/
-├── skill.yaml      # 元数据
+├── skill.yaml      # 元数据（含 dependencies 声明）
 └── executor.py     # Python 实现（必须有 run(**kwargs) 函数）
 ```
 
 关键规则：
 - executor.py 必须有 `def run(**kwargs)` 函数，返回字符串
 - triggers 字段帮助你在未来任务中判断何时应该调用这个技能
+- [CRITICAL] 如果 executor.py 中使用了第三方 Python 库，必须在 skill.yaml 的 dependencies.python 中声明（用 pip 包名），系统会在执行前自动安装
 - [CRITICAL] 你必须实际执行 python_exec 来写入文件！不要只在 thought 或 answer 里描述。**检查文件是否存在不等于创建文件**。你需要用 open() 和 write() 实际写入。
 - [CRITICAL] 如果 pip install 超时或失败，先搜索解决方案，不要放弃。可以尝试 pip install --timeout 300 或换源。
 - 安装大型库时，shell 命令默认有 120 秒超时，通常足够。如果仍然超时，尝试加 --timeout 参数。

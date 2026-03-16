@@ -12,6 +12,7 @@ All notable changes to this project will be documented in this file.
 - **system prompt: 搜索面板 "发送给" 说明**: Added guidance that after cmd+k search, clicking a contact shows a "发送给 XXX" card — must click it to enter chat.
 - **reasoner: complete hint chain for messaging**: After each desktop_control action (`hotkey`, `type`, `click`, `wait`), a contextual hint guides the LLM to the next step. The full chain: `hotkey cmd f` → type contact name → `wait 1` → `screenshot` → `click_xy` on result → `wait 1` → `screenshot` → `type <message>` → `hotkey return`.
 - **protocol: pdf_generation**: New protocol teaching MONAD to generate Chinese PDFs with reportlab + CJK fonts (STSong-Light). Avoids fpdf (no CJK) and weasyprint (heavy C deps).
+- **skill dependency auto-install**: Skills can now declare `dependencies.python` and `dependencies.system` in `skill.yaml`. Python deps are auto-checked via `importlib.metadata` and pip-installed before execution. No more wasted turns on ImportError → pip install → retry.
 
 ### Changed
 - **record_screen skill removed**: Replaced by `start_recording` + `stop_recording` (two atomic skills). The single-skill design had an irrecoverable cross-process stdin issue that caused all recorded MP4s to have missing moov atoms (unplayable).

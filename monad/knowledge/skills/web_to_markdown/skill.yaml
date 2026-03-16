@@ -12,3 +12,6 @@ triggers:
 - 用户给了一个 URL 并要求转成 markdown
 - 用户要求保存/导出某篇网页文章
 - 需要将网页内容转换为文本或 markdown
+dependencies:
+  python:
+    - beautifulsoup4

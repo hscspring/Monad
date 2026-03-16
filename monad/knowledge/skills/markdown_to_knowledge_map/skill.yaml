@@ -18,3 +18,9 @@ triggers:
 - 用户上传文章后要求生成配图或结构图
 - 用户给了一个 URL 并要求生成知识地图
 - 管道中上游 skill 输出了 Markdown，需要可视化
+dependencies:
+  python:
+    - beautifulsoup4
+    - doc2mermaid
+  system:
+    - mmdc  # npm install -g @mermaid-js/mermaid-cli
