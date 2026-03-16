@@ -21,6 +21,8 @@ All notable changes to this project will be documented in this file.
 - **CLAUDE.md: Minimal Dependencies as core philosophy**: Added as the first core philosophy — prefer pure-Python, smallest-footprint solutions.
 
 ### Fixed
+- **gitignore: `.env.*` secret leak prevention**: Added `.env.*` pattern (with `!.env.example` exception) to prevent accidental commit of API key files like `.env.claude`, `.env.minimax`.
+- **publish_to_xhs: smart title truncation**: Replaced hard `[:12]` cut with `_truncate_title()` — detects when the cut falls mid-English-word and backs up to the nearest space boundary, appending "…". Pure Chinese titles still cut at 12 chars cleanly.
 - **desktop_control: window bounds selected wrong window**: `_get_window_bounds()` was using osascript's `window 1`, which returned a 240×51 notification float for WeChat instead of the 934×724 main window. This caused `_filter_elements` to discard nearly all OCR results (47 → 2 elements), making the LLM effectively blind to the app's UI. Now uses Quartz `CGWindowListCopyWindowInfo` exclusively and picks the window with the **largest area**.
 - **desktop_control: activate hint said `cmd k` for WeChat**: The auto-screenshot message after `activate` incorrectly suggested `hotkey cmd k` for contact search. WeChat uses `cmd f`; only Feishu/Lark uses `cmd k`.
 - **desktop_control: search result vs input ambiguity**: `_find_all_matches()` now prefers the largest-y element for any number of exact matches (≥2), not just exactly 2. Adds `WARNING: SEARCH INPUT` hint when a single exact match is near the top of the window (y<120).
