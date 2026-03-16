@@ -232,7 +232,7 @@ def _fill_and_publish(page, title, content, topics, has_images=False):
     """Fill title, content, topics, then click publish."""
     title_input = page.locator('[placeholder*="填写标题"]').first
     title_input.click()
-    title_input.fill(title[:20])
+    title_input.fill(title[:12])
     time.sleep(0.5)
 
     editor = page.locator(".ProseMirror").first
@@ -279,7 +279,7 @@ def run(title="", content="", topics=None, images=None, **kwargs):
     doc2mermaid and attaches it as an extra slide.
 
     Args:
-        title:          Note title (truncated to 20 chars for XHS limit)
+        title:          Note title (truncated to 12 chars for readability)
         content:        Note body text
         topics:         List of topic/hashtag strings (e.g. ["AI", "技术分享"])
         images:         List of image file paths to upload
@@ -333,7 +333,7 @@ def run(title="", content="", topics=None, images=None, **kwargs):
 
             _fill_and_publish(page, title, content, topics, has_images=has_images)
 
-            parts = [f"✅ 已发布到小红书: 《{title[:20]}》"]
+            parts = [f"✅ 已发布到小红书: 《{title[:12]}》"]
             if kmap_path:
                 parts.append(f"📊 已附加知识图谱: {kmap_path}")
             result = "\n".join(parts)

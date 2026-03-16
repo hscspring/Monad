@@ -47,6 +47,12 @@ def run(output_path: str = "") -> str:
     _DEFAULT_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     _STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
 
+    if output_path:
+        output_path = os.path.expanduser(output_path)
+        parent = Path(output_path).parent
+        if not parent.exists():
+            output_path = ""
+
     if not output_path:
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         output_path = str(_DEFAULT_OUTPUT_DIR / f"recording_{ts}.mkv")

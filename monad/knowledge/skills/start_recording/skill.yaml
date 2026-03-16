@@ -2,7 +2,7 @@ name: start_recording
 goal: 后台启动屏幕录制，输出为 MKV 格式（支持强制停止后仍可播放），立即返回不阻塞其他任务
 inputs:
   output_path: |
-    （可选）录制输出的 MKV 文件路径，默认为 ~/.monad/output/recording_<timestamp>.mkv
+    （可选）留空即可，默认保存到 ~/.monad/output/recording_<timestamp>.mkv。不要传 MONAD_OUTPUT_DIR 等变量名。
 steps:
   - 用 ffmpeg -f avfoundation 以 MKV 容器后台录制屏幕（MKV 无 moov atom 问题，SIGKILL 后仍可播放）
   - 将 pid、mkv路径、开始时间写入 ~/.monad/cache/recording_state.json
