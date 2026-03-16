@@ -269,6 +269,23 @@ REASONER_SYSTEM = _PLATFORM_INFO + """You are MONAD, a rational autonomous agent
 
 MAX_TURNS = 30
 
+_PLAN_SYSTEM = """将用户请求分解为有序的执行步骤列表。
+
+可用技能（可直接作为 capability 调用，技能内部会自动完成所有操作）：
+{skills}
+
+基本能力：web_fetch（抓取网页）、python_exec（执行代码）、shell（系统命令）、ask_user（询问用户）、desktop_control（桌面操作）
+
+输出严格 JSON 数组，不要有其他文字：
+[{{"step": "步骤描述", "capability": "技能名或能力名"}}]
+
+规则：
+- 每个步骤对应一个具体的 action 调用
+- 优先匹配已有技能（如 publish_to_xhs、start_recording），技能是自包含的，调用即完成
+- 没有匹配技能时，用基本能力（web_fetch、python_exec 等）
+- 按执行顺序排列
+- 不要包含"思考""分析""判断"等非 action 步骤"""
+
 _COMPLETION_CHECK_SYSTEM = """判断一个 AI agent 是否完成了用户交给的所有子任务。
 
 规则：
@@ -308,6 +325,15 @@ class Reasoner:
         Output.phase("Phase 1: 加载知识上下文")
         context = self._build_context(user_input)
 
+        # Task decomposition: break multi-step requests into an explicit plan
+        Output.phase("Phase 2: 任务分解")
+        plan = self._decompose_task(user_input)
+        if plan:
+            for i, s in enumerate(plan):
+                Output.system(f"  Step {i + 1}: {s['step']} → [{s['capability']}]")
+        else:
+            Output.system("单步任务，跳过分解")
+
         history = []
         thoughts = []
         actions = []
@@ -322,7 +348,7 @@ class Reasoner:
             Output.phase(f"Reasoning Turn {turn + 1}/{MAX_TURNS}")
 
             # Build prompt
-            prompt = self._build_prompt(context, history)
+            prompt = self._build_prompt(context, history, plan or None)
 
             # Call LLM
             Output.system("正在调用 LLM 进行推理...")
@@ -560,24 +586,39 @@ class Reasoner:
                 if hint:
                     result = result + "\n" + hint
 
+                # Update plan progress
+                if plan:
+                    self._update_plan(plan, capability)
+
                 # Feed back to LLM
                 observation = f"Observation from {capability}:\n{result}"
+                if plan:
+                    remaining = self._plan_incomplete_steps(plan)
+                    if remaining:
+                        observation += f"\n\n{self._format_plan(plan)}"
                 history.append({"role": "user", "content": observation})
 
             # ── Handle: ANSWER ───────────────────────────────
             elif parsed["type"] == "answer":
-                # LLM-based completion check (replaces keyword matching)
+                # Completion check: plan-based (deterministic) or LLM fallback
                 if answer_rejections < _MAX_ANSWER_REJECTIONS:
-                    is_complete, incomplete_reason = self._check_task_completion(
-                        user_input, actions, parsed.get("content", "")
-                    )
+                    if plan:
+                        remaining = self._plan_incomplete_steps(plan)
+                        is_complete = not remaining
+                        incomplete_reason = "、".join(remaining) if remaining else ""
+                    else:
+                        is_complete, incomplete_reason = self._check_task_completion(
+                            user_input, actions, parsed.get("content", "")
+                        )
                     if not is_complete:
                         answer_rejections += 1
                         Output.warn(f"任务未完成 ({answer_rejections}/{_MAX_ANSWER_REJECTIONS}): {incomplete_reason}")
                         history.append({"role": "assistant", "content": raw_response})
+                        hint = self._format_plan(plan) + "\n" if plan else ""
                         history.append({"role": "user", "content":
                             f"[SYSTEM] 任务尚未完成，缺失步骤：{incomplete_reason}\n"
-                            f"不要回答，立刻执行缺失的操作。"
+                            f"{hint}"
+                            f"不要回答，立刻执行下一个缺失的操作。"
                         })
                         continue
 
@@ -875,6 +916,70 @@ class Reasoner:
         except Exception:
             return (True, "")
 
+    def _decompose_task(self, user_input: str) -> list[dict]:
+        """Decompose user request into an ordered step plan via LLM.
+
+        Returns list of {"step": str, "capability": str, "done": bool}.
+        Returns empty list on failure (graceful degradation).
+        """
+        skills_text = self.vault.load_skills()
+        skill_names = []
+        for line in skills_text.split("\n"):
+            if line.startswith("Skill: "):
+                skill_names.append(line[7:].strip())
+        skills_summary = ", ".join(skill_names) if skill_names else "(无)"
+
+        system = _PLAN_SYSTEM.format(skills=skills_summary)
+        try:
+            raw = llm_call(
+                f"用户请求：{user_input}",
+                system=system, temperature=0, max_tokens=400,
+            )
+            raw = raw.strip()
+            if "```" in raw:
+                raw = re.sub(r"```\w*\n?", "", raw).strip()
+            start = raw.find("[")
+            end = raw.rfind("]")
+            if start >= 0 and end > start:
+                raw = raw[start:end + 1]
+            steps = json.loads(raw)
+            if not isinstance(steps, list) or not steps:
+                return []
+            return [
+                {"step": s.get("step", ""), "capability": s.get("capability", ""), "done": False}
+                for s in steps if isinstance(s, dict) and s.get("step")
+            ]
+        except Exception:
+            return []
+
+    @staticmethod
+    def _update_plan(plan: list[dict], capability: str) -> None:
+        """Mark the first matching undone step as done."""
+        for step in plan:
+            if not step["done"] and step["capability"] == capability:
+                step["done"] = True
+                return
+
+    @staticmethod
+    def _format_plan(plan: list[dict]) -> str:
+        """Format plan as a checklist for LLM context injection."""
+        lines = ["[PLAN]"]
+        next_found = False
+        for i, s in enumerate(plan):
+            if s["done"]:
+                lines.append(f"  ✅ {i + 1}. {s['step']}")
+            else:
+                marker = " ← NEXT" if not next_found else ""
+                lines.append(f"  ⬜ {i + 1}. {s['step']} [{s['capability']}]{marker}")
+                if not next_found:
+                    next_found = True
+        return "\n".join(lines)
+
+    @staticmethod
+    def _plan_incomplete_steps(plan: list[dict]) -> list[str]:
+        """Return descriptions of undone steps."""
+        return [s["step"] for s in plan if not s["done"]]
+
     @staticmethod
     def _thought_similarity(a: str, b: str) -> float:
         """Jaccard similarity between two thought strings (word-level)."""
@@ -884,12 +989,15 @@ class Reasoner:
             return 0.0
         return len(words_a & words_b) / len(words_a | words_b)
 
-    def _build_prompt(self, context: str, history: list) -> str:
+    def _build_prompt(self, context: str, history: list, plan: list[dict] | None = None) -> str:
         """Build the full prompt for the LLM.
 
         Trims old history to stay within a reasonable context budget.
         """
         parts = [context]
+
+        if plan:
+            parts.append("\n" + self._format_plan(plan))
 
         trimmed = history[-_HISTORY_CAP:] if len(history) > _HISTORY_CAP else history
 

@@ -122,6 +122,7 @@ knowledge/
 
 ### Reasoner (cognition/reasoner.py)
 
+- **Task Decomposition**: Before the ReAct loop, multi-step tasks are decomposed into an explicit ordered plan via LLM. Plan is tracked throughout execution (`✅`/`⬜`), injected into each turn's context, and used for deterministic completion checking. This prevents step-skipping and provides accurate rejection reasons.
 - Multi-turn ReAct reasoning with max 30 turns
 - LLM responds with JSON in 3 types:
   - `{"type": "thought", "content": "reasoning"}` - Internal reasoning
