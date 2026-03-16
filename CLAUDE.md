@@ -8,6 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### Core Philosophy
 
+- **Minimal Dependencies**: MONAD keeps external dependencies as few and lightweight as possible. Never introduce heavy/complex libraries when a simpler alternative exists. Prefer pure-Python solutions over those requiring system-level C libraries. When choosing between tools, always pick the one with the smallest dependency footprint. This is a top priority.
 - **Stateless Design**: No chat history; every task starts with fresh context. Vital information persists via reflection loops to markdown files.
 - **File System as Database**: All knowledge (axioms, skills, experiences, user context) stored as markdown files. No vector DB, no RAG.
 - **Absolute Rationality**: Follows strict reasoning loop: Analyze → Self-check → Learn → Execute → Reflect
@@ -16,7 +17,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **LLM as Command Executor**: LLM training data is disregarded. All factual information must be retrieved from real world via code execution or web perception.
 - **Experience Staging & Hygiene**: New experiences land in `pending.jsonl` first. Only when the same tag pattern recurs ≥3 times is the best example promoted to `accumulated_experiences.md`. Failed experiences are tagged `[FAILED]` and never promoted.
 - **Tag-Based Experience Retrieval**: Experiences scored by `relevance × 2 + recency` (keyword overlap + timestamp). Top entries selected plus 3 most recent as fallback. No vector DB.
-- **Anti-Hallucination Verification**: Post-action verification checks filesystem after skill creation actions. Hollow answer guard rejects answers claiming creation without actual write actions.
+- **Anti-Hallucination Verification**: Post-action verification checks filesystem after skill creation actions. LLM-based completion check validates all subtasks are done before accepting an answer.
 - **Skill Deduplication (Reuse First)**: System prompt instructs LLM to check existing skills before creating new ones. SkillBuilder supports `skip`/`update`/`create` actions, preferring `update`.
 
 ### Basic Capabilities (5 "Instincts")
@@ -130,7 +131,7 @@ knowledge/
 - System prompt enforces "Search First" principle, "Reuse First" for skills, and rationality rules
 - System prompt dynamically injects current OS/platform info so LLM generates platform-correct commands
 - Post-action verification: checks skill files exist after creation actions
-- Hollow answer guard: rejects answers claiming creation without write actions
+- LLM-based task completion check: calls LLM to semantically validate all subtasks are done before accepting an answer (fail-open with max 3 rejections to prevent loops)
 
 ### Executor (execution/executor.py)
 

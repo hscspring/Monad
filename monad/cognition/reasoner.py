@@ -24,6 +24,9 @@ _THOUGHT_HARD_LIMIT = 4
 # Max consecutive ask_user before forcing LLM to proceed without user input
 _ASK_USER_LIMIT = 2
 
+# Max times an answer can be rejected by completion check before forcing accept
+_MAX_ANSWER_REJECTIONS = 3
+
 # Jaccard word-overlap threshold to consider two thoughts "the same"
 _SIMILARITY_THRESHOLD = 0.6
 
@@ -34,11 +37,13 @@ _THOUGHT_HISTORY_CAP = 400
 _HISTORY_CAP = 30
 
 
+_PATH_SEP = "反斜杠 \\\\" if platform.system() == "Windows" else "/"
+
 _PLATFORM_INFO = f"""## 当前运行环境
 
 - OS: {platform.system()} {platform.release()} ({platform.machine()})
 - Shell: {"PowerShell/cmd" if platform.system() == "Windows" else "bash/zsh"}
-- 路径分隔符: {"反斜杠 \\\\" if platform.system() == "Windows" else "/"}
+- 路径分隔符: {_PATH_SEP}
 - 使用 shell 能力时，必须生成当前操作系统对应的命令（例如 Windows 上用 dir 而非 ls，用 type 而非 cat）。
 """
 
@@ -254,6 +259,20 @@ REASONER_SYSTEM = _PLATFORM_INFO + """You are MONAD, a rational autonomous agent
 
 MAX_TURNS = 30
 
+_COMPLETION_CHECK_SYSTEM = """判断一个 AI agent 是否完成了用户交给的所有子任务。
+
+规则：
+- "告诉我X" / "分析X" / "帮我看看X" 表示 agent 应在回答中包含分析结果，不需要通过桌面应用发消息
+- 只检查任务步骤是否被实际执行（代码执行、文件写入、网页抓取、技能调用等），不检查回答质量
+- 如果用户请求包含多个步骤（如 "开始录屏 → 做某事 → 结束录制"），每个步骤都必须有对应的 action
+- 技能调用（如 start_recording, stop_recording, fetch_topic_news）也算有效 action
+- 桌面消息发送任务（给某人发消息/发信息）必须有 desktop_control 的 type + hotkey return 动作
+
+请严格按以下格式回复，不要添加任何其他文字：
+COMPLETE
+或
+INCOMPLETE|<简短说明缺失了什么>"""
+
 
 class Reasoner:
     """Multi-turn ReAct reasoning engine.
@@ -286,6 +305,7 @@ class Reasoner:
         _recent_action_sigs = []  # tracks action signatures for loop detection
         _click_target_counts = {}  # tracks click target repetitions across turns
         _active_app = None  # tracks the last successfully activated app
+        answer_rejections = 0
 
         for turn in range(MAX_TURNS):
             Output.phase(f"Reasoning Turn {turn + 1}/{MAX_TURNS}")
@@ -535,62 +555,20 @@ class Reasoner:
 
             # ── Handle: ANSWER ───────────────────────────────
             elif parsed["type"] == "answer":
-                # Guard: reject hollow answers that claim creation
-                # without actual write actions
-                if self._is_hollow_answer(user_input, actions):
-                    Output.warn("检测到空洞回答：声称完成操作但未实际执行，强制要求执行")
-                    history.append({"role": "assistant", "content": raw_response})
-                    # Build a targeted rejection message based on what's missing
-                    dc_actions_done = [
-                        a.get("params", {}).get("action", "").strip()
-                        for a in actions
-                        if a.get("capability") == "desktop_control"
-                    ]
-                    has_type = any(a.lower().startswith("type ") for a in dc_actions_done)
-                    has_send = any(
-                        a.lower() in ("hotkey return", "hotkey enter", "hotkey cmd return")
-                        for a in dc_actions_done
+                # LLM-based completion check (replaces keyword matching)
+                if answer_rejections < _MAX_ANSWER_REJECTIONS:
+                    is_complete, incomplete_reason = self._check_task_completion(
+                        user_input, actions, parsed.get("content", "")
                     )
-                    has_click = any(
-                        a.lower().startswith(("click", "click_xy"))
-                        for a in dc_actions_done
-                    )
-                    # Only count 'type' as "message typed" if the typed content
-                    # matches the message to send (not just a contact search term).
-                    import re as _re2
-                    msg_match = _re2.search(r'[""「\'"]([^"""\'」]{1,50})[""」\'"]', user_input)
-                    expected_msg = msg_match.group(1) if msg_match else None
-                    has_msg_typed = any(
-                        a.lower().startswith("type ")
-                        and (expected_msg is None or expected_msg.lower() in a.lower())
-                        for a in dc_actions_done
-                    )
-                    if has_click and not has_msg_typed:
-                        msg_to_type = expected_msg or "<message content>"
-                        reject_msg = (
-                            "[SYSTEM] You clicked a contact but you have NOT typed the message yet. "
-                            "The chat window should now be open. Your ONLY next steps are:\n"
-                            f"1. desktop_control screenshot — confirm the chat is open\n"
-                            f"2. desktop_control type {msg_to_type} — type the message in the chat input\n"
-                            "3. desktop_control hotkey return — press Enter to SEND\n"
-                            "4. desktop_control screenshot — confirm message was sent\n"
-                            "DO NOT answer. Execute these steps NOW."
-                        )
-                    elif has_msg_typed and not has_send:
-                        reject_msg = (
-                            "[SYSTEM] You typed the message but did NOT press Enter to send it. "
-                            "Execute NOW: desktop_control hotkey return — then screenshot to confirm."
-                        )
-                    else:
-                        reject_msg = (
-                            "[SYSTEM] Your answer claims you completed the task, but action history "
-                            "shows you did NOT actually perform the required operations. "
-                            "For desktop messaging: you MUST (1) screenshot to see the current UI, "
-                            "(2) type <message> in the chat input, (3) hotkey return to send. "
-                            "DO NOT answer again — take action NOW."
-                        )
-                    history.append({"role": "user", "content": reject_msg})
-                    continue
+                    if not is_complete:
+                        answer_rejections += 1
+                        Output.warn(f"任务未完成 ({answer_rejections}/{_MAX_ANSWER_REJECTIONS}): {incomplete_reason}")
+                        history.append({"role": "assistant", "content": raw_response})
+                        history.append({"role": "user", "content":
+                            f"[SYSTEM] 任务尚未完成，缺失步骤：{incomplete_reason}\n"
+                            f"不要回答，立刻执行缺失的操作。"
+                        })
+                        continue
 
                 Output.phase("任务完成")
                 return {
@@ -843,77 +821,48 @@ class Reasoner:
                 parts.append(f"⚠️ executor.py NOT found at {skill_path}/executor.py")
         return " | ".join(parts)
 
-    @staticmethod
-    def _is_hollow_answer(user_input: str, actions: list) -> bool:
-        """Detect answers that claim creation/action without actual execution.
+    def _check_task_completion(self, user_input: str, actions: list,
+                               proposed_answer: str) -> tuple:
+        """Use LLM to semantically check if all subtasks are done.
 
-        Returns True when the user's request implies creating/saving something
-        but the action history contains no python_exec or shell write commands,
-        OR when the task implies desktop GUI interaction but no click/type/hotkey
-        actions were actually performed.
+        Returns (is_complete: bool, reason: str).
+        Defaults to complete on LLM failure (fail-open to prevent loops).
         """
-        task_lower = user_input.lower()
-
-        # --- Check 1: Creation tasks need write actions ---
-        creation_keywords = ["创建", "生成", "保存", "安装", "学习", "制作",
-                             "写入", "install", "create", "save", "build"]
-        if any(kw in task_lower for kw in creation_keywords):
-            write_indicators = ["open(", "write(", "makedirs", "mkdir",
-                                "pip install", "save_", "> ", ">>",
-                                "with open", "write_text"]
-            for action in actions:
-                cap = action.get("capability", "")
-                if cap not in ("python_exec", "shell"):
-                    continue
-                code = action.get("params", {}).get("code", "")
-                cmd = action.get("params", {}).get("command", "")
-                payload = code + cmd
-                if any(w in payload for w in write_indicators):
-                    break
+        action_lines = []
+        for i, a in enumerate(actions, 1):
+            cap = a.get("capability", "")
+            p = a.get("params", {})
+            if cap == "python_exec":
+                desc = p.get("code", "")[:150].replace("\n", " ")
+            elif cap == "shell":
+                desc = p.get("command", "")
+            elif cap == "web_fetch":
+                desc = p.get("url", "")
+            elif cap == "desktop_control":
+                desc = p.get("action", "")
             else:
-                return True
+                desc = str(p)[:100]
+            action_lines.append(f"{i}. [{cap}] {desc}")
 
-        # --- Check 2: Desktop interaction tasks need click/type/hotkey ---
-        desktop_keywords = ["打开", "点击", "发消息", "发送", "输入", "操作",
-                            "给.*发", "click", "type", "send", "open.*app"]
-        import re
-        if any(re.search(kw, task_lower) for kw in desktop_keywords):
-            interaction_actions = {"click", "double_click", "click_xy", "type", "hotkey"}
-            for action in actions:
-                if action.get("capability") != "desktop_control":
-                    continue
-                act_str = action.get("params", {}).get("action", "")
-                cmd = act_str.strip().split(None, 1)[0].lower() if act_str.strip() else ""
-                if cmd in interaction_actions:
-                    break
-            else:
-                return True
+        prompt = (
+            f"用户请求：{user_input}\n\n"
+            f"已执行的动作：\n" + "\n".join(action_lines) + "\n\n"
+            f"Agent 准备回答（摘要）：{proposed_answer[:500]}\n\n"
+            f"任务是否全部完成？"
+        )
 
-        # --- Check 3: Messaging tasks require type + hotkey return (or click send button) ---
-        # A lone 'type' could be search input — only count it if followed by
-        # 'hotkey return' / 'hotkey enter' / click on a send button.
-        messaging_keywords = ["发消息", "发信息", "发个消息", "发送消息",
-                              "给.*发.*消息", "给.*说", "告诉.*", "问.*",
-                              "send.*message", "send.*msg"]
-        if any(re.search(kw, task_lower) for kw in messaging_keywords):
-            dc_actions = [
-                a.get("params", {}).get("action", "").strip()
-                for a in actions
-                if a.get("capability") == "desktop_control"
-            ]
-            # Check that we see: type <something> AND (hotkey return/enter OR click send)
-            has_type = any(a.lower().startswith("type ") for a in dc_actions)
-            has_send = any(
-                a.lower() in ("hotkey return", "hotkey enter", "hotkey cmd return")
-                or (a.lower().startswith("click") and any(
-                    kw in a for kw in ("发送", "Send", "send", "发 ")
-                ))
-                for a in dc_actions
-            )
-            if not (has_type and has_send):
-                return True
-
-        return False
+        try:
+            raw = llm_call(prompt, system=_COMPLETION_CHECK_SYSTEM,
+                           temperature=0, max_tokens=100)
+            raw = raw.strip()
+            if raw.startswith("COMPLETE"):
+                return (True, "")
+            if raw.startswith("INCOMPLETE"):
+                reason = raw.split("|", 1)[1].strip() if "|" in raw else "部分步骤未执行"
+                return (False, reason)
+            return (True, "")
+        except Exception:
+            return (True, "")
 
     @staticmethod
     def _thought_similarity(a: str, b: str) -> float:

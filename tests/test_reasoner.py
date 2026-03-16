@@ -1,6 +1,7 @@
-"""Tests for Reasoner — JSON parsing, hollow answer guard, action verification, thought similarity, platform info."""
+"""Tests for Reasoner — JSON parsing, completion check, action verification, thought similarity, platform info."""
 
 import platform
+from unittest.mock import patch
 
 import pytest
 from monad.cognition.reasoner import Reasoner, REASONER_SYSTEM, _PLATFORM_INFO
@@ -124,104 +125,77 @@ class TestThoughtSimilarity:
 
 
 # ---------------------------------------------------------------------------
-# _is_hollow_answer
+# _check_task_completion (replaces _is_hollow_answer)
 # ---------------------------------------------------------------------------
 
-class TestHollowAnswerGuard:
+class TestTaskCompletionCheck:
 
-    def test_creation_no_write_is_hollow(self, reasoner):
+    def test_complete_response_returns_true(self, reasoner):
+        with patch("monad.cognition.reasoner.llm_call", return_value="COMPLETE"):
+            is_complete, reason = reasoner._check_task_completion(
+                "今天天气怎么样", [], "今天北京晴天"
+            )
+            assert is_complete is True
+            assert reason == ""
+
+    def test_incomplete_response_returns_false_with_reason(self, reasoner):
+        with patch("monad.cognition.reasoner.llm_call",
+                   return_value="INCOMPLETE|未调用 stop_recording 结束录制"):
+            is_complete, reason = reasoner._check_task_completion(
+                "开始录屏，分析博客，结束录制",
+                [{"capability": "start_recording", "params": {}}],
+                "分析完成"
+            )
+            assert is_complete is False
+            assert "stop_recording" in reason
+
+    def test_incomplete_without_pipe_gives_default_reason(self, reasoner):
+        with patch("monad.cognition.reasoner.llm_call", return_value="INCOMPLETE"):
+            is_complete, reason = reasoner._check_task_completion(
+                "创建文件", [], "已完成"
+            )
+            assert is_complete is False
+            assert reason == "部分步骤未执行"
+
+    def test_llm_failure_defaults_to_complete(self, reasoner):
+        """Fail-open: if LLM call fails, allow the answer through."""
+        with patch("monad.cognition.reasoner.llm_call", side_effect=Exception("timeout")):
+            is_complete, reason = reasoner._check_task_completion(
+                "帮我创建一个技能", [], "已创建"
+            )
+            assert is_complete is True
+
+    def test_unparseable_response_defaults_to_complete(self, reasoner):
+        with patch("monad.cognition.reasoner.llm_call", return_value="I'm not sure"):
+            is_complete, reason = reasoner._check_task_completion(
+                "做个报告", [], "报告已生成"
+            )
+            assert is_complete is True
+
+    def test_action_summary_includes_all_capabilities(self, reasoner):
+        """Verify that the prompt sent to LLM contains all action types."""
         actions = [
-            {"capability": "python_exec", "params": {"code": "print(os.path.exists('/tmp'))"}},
-        ]
-        assert reasoner._is_hollow_answer("帮我创建一个技能", actions) is True
-
-    def test_creation_with_write_not_hollow(self, reasoner):
-        actions = [
-            {"capability": "python_exec", "params": {"code": "with open('f.py', 'w') as f: f.write('hi')"}},
-        ]
-        assert reasoner._is_hollow_answer("帮我创建一个技能", actions) is False
-
-    def test_non_creation_never_hollow(self, reasoner):
-        assert reasoner._is_hollow_answer("今天天气怎么样", []) is False
-
-    def test_pip_install_not_hollow(self, reasoner):
-        actions = [{"capability": "shell", "params": {"command": "pip install docling"}}]
-        assert reasoner._is_hollow_answer("安装 docling", actions) is False
-
-    def test_english_keywords(self, reasoner):
-        assert reasoner._is_hollow_answer("create a new skill", []) is True
-
-    def test_makedirs_counts_as_write(self, reasoner):
-        actions = [{"capability": "python_exec", "params": {"code": "os.makedirs('/tmp/s')"}}]
-        assert reasoner._is_hollow_answer("保存技能", actions) is False
-
-    def test_desktop_send_message_no_click_is_hollow(self, reasoner):
-        actions = [
-            {"capability": "shell", "params": {"command": "open -a Lark"}},
-            {"capability": "desktop_control", "params": {"action": "activate Lark"}},
+            {"capability": "python_exec", "params": {"code": "print('hi')"}},
+            {"capability": "shell", "params": {"command": "ls"}},
+            {"capability": "web_fetch", "params": {"url": "https://example.com"}},
             {"capability": "desktop_control", "params": {"action": "screenshot"}},
+            {"capability": "start_recording", "params": {"output_path": "/tmp/r.mkv"}},
         ]
-        assert reasoner._is_hollow_answer("打开飞书给cube发消息", actions) is True
+        captured_prompt = None
 
-    def test_desktop_send_message_with_click_not_hollow(self, reasoner):
-        # type alone without hotkey return is still hollow — message not actually sent
-        actions = [
-            {"capability": "desktop_control", "params": {"action": "activate Lark"}},
-            {"capability": "desktop_control", "params": {"action": "click cube"}},
-            {"capability": "desktop_control", "params": {"action": "type 你好"}},
-        ]
-        assert reasoner._is_hollow_answer("给cube发消息", actions) is True
+        def mock_llm(prompt, **kwargs):
+            nonlocal captured_prompt
+            captured_prompt = prompt
+            return "COMPLETE"
 
-    def test_desktop_send_message_with_type_and_return_not_hollow(self, reasoner):
-        # type + hotkey return = message actually sent
-        actions = [
-            {"capability": "desktop_control", "params": {"action": "activate Lark"}},
-            {"capability": "desktop_control", "params": {"action": "click cube"}},
-            {"capability": "desktop_control", "params": {"action": "type 你好"}},
-            {"capability": "desktop_control", "params": {"action": "hotkey return"}},
-        ]
-        assert reasoner._is_hollow_answer("给cube发消息", actions) is False
+        with patch("monad.cognition.reasoner.llm_call", side_effect=mock_llm):
+            reasoner._check_task_completion("test", actions, "done")
 
-    def test_messaging_click_only_no_type_is_hollow(self, reasoner):
-        """Bug case: LLM clicks around but never types the message."""
-        actions = [
-            {"capability": "shell", "params": {"command": "open -a Lark"}},
-            {"capability": "desktop_control", "params": {"action": "activate Lark"}},
-            {"capability": "desktop_control", "params": {"action": "screenshot"}},
-            {"capability": "desktop_control", "params": {"action": "click 消息"}},
-            {"capability": "desktop_control", "params": {"action": "click 百合"}},
-            {"capability": "desktop_control", "params": {"action": "click 百合"}},
-        ]
-        assert reasoner._is_hollow_answer("打开飞书给百合发个消息，问她晚上一起吃饭不", actions) is True
-
-    def test_messaging_with_type_not_hollow(self, reasoner):
-        actions = [
-            {"capability": "desktop_control", "params": {"action": "click 百合"}},
-            {"capability": "desktop_control", "params": {"action": "type 晚上一起吃饭吗？"}},
-            {"capability": "desktop_control", "params": {"action": "hotkey enter"}},
-        ]
-        assert reasoner._is_hollow_answer("打开飞书给百合发个消息，问她晚上一起吃饭不", actions) is False
-
-    def test_ask_question_requires_type(self, reasoner):
-        actions = [
-            {"capability": "desktop_control", "params": {"action": "click 百合"}},
-        ]
-        assert reasoner._is_hollow_answer("问她晚上一起吃饭不", actions) is True
-
-    def test_desktop_open_app_with_click_not_hollow(self, reasoner):
-        actions = [
-            {"capability": "desktop_control", "params": {"action": "click 搜索"}},
-        ]
-        assert reasoner._is_hollow_answer("打开设置", actions) is False
-
-    def test_desktop_click_keyword_with_type_not_hollow(self, reasoner):
-        actions = [
-            {"capability": "desktop_control", "params": {"action": "type hello"}},
-        ]
-        assert reasoner._is_hollow_answer("输入hello并发送", actions) is False
-
-    def test_non_desktop_task_not_affected(self, reasoner):
-        assert reasoner._is_hollow_answer("今天天气怎么样", []) is False
+        assert "[python_exec]" in captured_prompt
+        assert "[shell]" in captured_prompt
+        assert "[web_fetch]" in captured_prompt
+        assert "[desktop_control]" in captured_prompt
+        assert "[start_recording]" in captured_prompt
 
 
 # ---------------------------------------------------------------------------
