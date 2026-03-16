@@ -229,5 +229,6 @@ Requires optional dependency: `pip install monad-core[feishu]`
 - **Chrome browser** required for web_fetch browser mode (uses system Chrome, no separate install needed)
 - **OpenAI-compatible API** required (configured via `~/.monad/.env`)
 - User workspace at `~/.monad/` is separate from package code at `monad/`
+- **Knowledge sync**: On startup, `skills/`, `protocols/`, `tools/` are always overwritten from the bundled package (system-managed). `user/`, `experiences/`, `axioms/`, `environment/` only get new files (user-managed, never overwritten).
 - First run triggers interactive setup if API key missing
 - All output uses Chinese + English (bilingual system messages)

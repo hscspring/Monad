@@ -72,6 +72,9 @@ venv.bak/
 *.bak
 .DS_Store
 
+# Generated files
+*.pdf
+
 # Logs
 logs/
 *.log

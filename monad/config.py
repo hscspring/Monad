@@ -16,7 +16,11 @@ WORKSPACE_DIR = Path.home() / ".monad"
 if not WORKSPACE_DIR.exists():
     WORKSPACE_DIR.mkdir(parents=True)
 
-# Sync bundled knowledge → user workspace (incremental: new files only)
+# Sync bundled knowledge → user workspace
+# System-managed dirs: always overwrite (ensures bug fixes reach users)
+# User-managed dirs: only copy new files (preserves customizations)
+_SYSTEM_MANAGED_DIRS = {"skills", "protocols", "tools"}
+
 knowledge_dir = WORKSPACE_DIR / "knowledge"
 bundled_knowledge = PACKAGE_DIR / "knowledge"
 if bundled_knowledge.exists():
@@ -28,9 +32,11 @@ if bundled_knowledge.exists():
                 continue
             rel = src_file.relative_to(bundled_knowledge)
             dest = knowledge_dir / rel
-            if not dest.exists():
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(src_file, dest)
+            top_dir = rel.parts[0] if rel.parts else ""
+            if dest.exists() and top_dir not in _SYSTEM_MANAGED_DIRS:
+                continue
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src_file, dest)
 
 # Create default .env if missing
 env_file = WORKSPACE_DIR / ".env"
