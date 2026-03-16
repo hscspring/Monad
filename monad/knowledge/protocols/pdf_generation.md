@@ -45,3 +45,4 @@ cn_heading = ParagraphStyle(
 - **不要用 weasyprint**：依赖系统 C 库，安装复杂
 - **reportlab 是首选**：纯 Python，内置 CJK 字体，pip install 即可
 - 所有 Paragraph 的 fontName 都必须设为 CJK 字体，包括标题、正文、列表项
+- **长报告必须先写文件再执行**：PDF 生成代码通常超过 80 行，直接放在 python_exec 的 code 字段会导致 JSON 输出被截断。正确做法：先用 python_exec 把完整的 .py 脚本 write 到文件，再用 shell `python /path/to/script.py` 执行
