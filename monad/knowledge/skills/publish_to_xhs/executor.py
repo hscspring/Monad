@@ -160,47 +160,77 @@ def _upload_images_flow(page, images):
     return True
 
 
-_CARD_SUMMARY_PROMPT = """你是小红书文案专家。将以下内容精炼为3-5句话的文字卡片文案。
+_CARD_SUMMARY_PROMPT = """你是小红书爆款文案专家。将以下内容改写为适合「文字卡片」的精华文案。
 
 要求：
-- 总共只写3-5句话，极度精炼
-- 每句话不超过15个字
-- 第一句是主题，后面是最核心的2-4个要点
-- 去掉所有符号(•-等)，不要编号
-- 用原文语言
-- 只返回文案本身，不要其他内容
+- 写3-5句话，每句不超过15个字
+- 第一句用一个吸引人的短句点题（可以用反问、感叹、判断句）
+- 后面2-4句提炼最核心的洞察或金句
+- 风格：口语化、有态度、有信息密度，像朋友分享观点
+- 去掉所有技术术语缩写（如 TL;DR、SOTA、RLHF），用大白话替代
+- 去掉所有符号(•-*等)和编号
+- 只返回文案本身，不要解释
+
+原文：
+"""
+
+_REWRITE_BODY_PROMPT = """你是小红书内容改写专家。将以下文章/技术内容改写为小红书笔记正文。
+
+要求：
+- 200-400字，段落清晰
+- 开头抛出一个引人注目的观点或问题（不要用"大家好"等套话）
+- 去掉所有博客/论文术语（TL;DR、Abstract、SOTA等），用口语化表达
+- 把专业概念用通俗比喻解释，让非技术读者也能看懂核心观点
+- 适当用短句、分行增强可读性
+- 结尾可以抛出一个互动问题或个人观点
+- 保留原文的核心信息和观点，不要编造
+- 只返回改写后的正文，不要标题、不要解释
 
 原文：
 """
 
 
-def _summarize_for_card(content):
-    """Use LLM to condense content into 3-5 short sentences for XHS text cards."""
+def _llm_call(prompt, max_tokens=500):
+    """Shared LLM call helper. Returns response text or None on failure."""
     try:
         from openai import OpenAI
     except ImportError:
-        return _fallback_flatten(content)
+        return None
 
     base_url = os.getenv("MONAD_BASE_URL", "")
     api_key = os.getenv("MONAD_API_KEY", "")
     model = os.getenv("MODEL_ID", "")
     if not all([base_url, api_key, model]):
-        return _fallback_flatten(content)
+        return None
 
     try:
         client = OpenAI(base_url=base_url, api_key=api_key)
         resp = client.chat.completions.create(
             model=model,
-            messages=[{"role": "user", "content": _CARD_SUMMARY_PROMPT + content}],
-            temperature=0.3,
-            max_tokens=200,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.4,
+            max_tokens=max_tokens,
         )
-        text = resp.choices[0].message.content.strip()
-        lines = [l.strip() for l in text.splitlines() if l.strip()]
+        return resp.choices[0].message.content.strip()
+    except Exception:
+        return None
+
+
+def _rewrite_for_xhs(content):
+    """Rewrite article content into XHS-style body text via LLM."""
+    result = _llm_call(_REWRITE_BODY_PROMPT + content[:3000], max_tokens=500)
+    if result and len(result) > 50:
+        return result
+    return content
+
+
+def _summarize_for_card(content):
+    """Use LLM to condense content into 3-5 short sentences for XHS text cards."""
+    result = _llm_call(_CARD_SUMMARY_PROMPT + content[:2000], max_tokens=200)
+    if result:
+        lines = [l.strip() for l in result.splitlines() if l.strip()]
         if 2 <= len(lines) <= 8:
             return "\n".join(lines[:5])
-    except Exception:
-        pass
     return _fallback_flatten(content)
 
 
@@ -314,12 +344,14 @@ def run(title="", content="", topics=None, images=None, **kwargs):
     knowledge_map = kwargs.get("knowledge_map", True)
     source_url = kwargs.get("source_url", "")
 
-    if source_url:
-        content = f"{content}\n\n原文链接：{source_url}"
-
     kmap_path = None
     if knowledge_map:
         kmap_path = _generate_knowledge_map(content)
+
+    xhs_body = _rewrite_for_xhs(content)
+
+    if source_url:
+        xhs_body = f"{xhs_body}\n\n原文链接：{source_url}"
 
     with sync_playwright() as p:
         context = _get_context(p, headless=False)
@@ -340,12 +372,12 @@ def run(title="", content="", topics=None, images=None, **kwargs):
                 has_images = _upload_images_flow(page, images)
 
             if not has_images:
-                _text_card_flow(page, content)
+                _text_card_flow(page, xhs_body)
 
             if kmap_path:
                 _add_extra_images(page, [kmap_path])
 
-            _fill_and_publish(page, title, content, topics, has_images=has_images)
+            _fill_and_publish(page, title, xhs_body, topics, has_images=has_images)
 
             parts = [f"✅ 已发布到小红书: 《{_truncate_title(title)}》"]
             if kmap_path:
