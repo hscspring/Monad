@@ -73,15 +73,12 @@ def run(code: str = "", **kwargs) -> str:
         if stderr_val.strip():
             result_parts.append(f"[stderr] {stderr_val.strip()}")
 
-        # Detect new files in output dir and emit download links
+        # Detect new files in output dir (file_link emitted by Executor)
         after = set(MONAD_OUTPUT_DIR.iterdir()) if MONAD_OUTPUT_DIR.exists() else set()
         new_files = after - before
         if new_files:
-            from monad.interface.output import Output
             for f in sorted(new_files):
-                url = f"/output/{f.name}"
-                Output.file_link(str(f), url)
-                result_parts.append(f"[file saved] {f.name} → {url}")
+                result_parts.append(f"[file saved] {f.name} → /output/{f.name}")
 
         return "\n".join(result_parts) if result_parts else "(executed successfully, no output)"
 

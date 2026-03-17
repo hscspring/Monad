@@ -40,7 +40,18 @@ Rules:
 - Only use "create" when the task pattern is reusable AND no existing skill is even remotely related.
 - Skill names must be snake_case and GENERAL (e.g. "web_to_markdown" not "convert_wechat_article_to_markdown").
 - The code field must contain REAL, WORKING Python code based on what was actually executed.
-- If the task is too specific or one-off, use "skip"."""
+- If the task is too specific or one-off, use "skip".
+
+IMPORTANT — when to SKIP (do NOT create skills for these):
+- Analyzing a SPECIFIC person, website, or entity (e.g. "分析 yam.gift 博主" → skip, because the analysis content is unique each time and cannot be hardcoded)
+- Tasks where the core value is LLM reasoning/analysis, not repeatable code logic
+- Any skill that would need to hardcode analysis results, advice, or conclusions — that's a hollow skill
+
+Code quality requirements:
+- For analysis/report tasks: the code MUST call web_fetch() or shell() to fetch real data, and MUST use LLM to generate analysis — NEVER hardcode analysis text
+- For PDF tasks: MUST register CJK fonts (UnicodeCIDFont('STSong-Light')) for Chinese support
+- MUST save output to MONAD_OUTPUT_DIR, not to the home directory or current directory
+- MUST use injected tools (web_fetch, shell) instead of importing requests directly"""
 
 
 class SkillBuilder:
@@ -99,13 +110,23 @@ class SkillBuilder:
             Output.warn("评估要求更新技能但未指定目标，跳过")
             return None
 
+        code = skill.get("code", "")
+        if not code or "def run" not in code:
+            Output.warn("技能代码缺少 run() 函数，跳过更新")
+            return None
+
+        passed, review = self._review_code(code, skill.get("goal", ""))
+        if not passed:
+            Output.warn(f"技能代码质量不过关，跳过更新: {review}")
+            return None
+
         Output.learning(f"正在更新已有技能: {target} ({reason})")
         self.vault.save_skill(
             name=target,
             goal=skill.get("goal", ""),
             inputs=skill.get("inputs", []),
             steps=skill.get("steps", []),
-            code=skill.get("code", ""),
+            code=code,
             triggers=skill.get("triggers"),
         )
         Output.learning(f"♻️ 技能已更新: {target}")
@@ -121,17 +142,64 @@ class SkillBuilder:
             Output.warn("评估结果缺少技能名称，跳过")
             return None
 
+        code = skill.get("code", "")
+        if not code or "def run" not in code:
+            Output.warn("技能代码缺少 run() 函数，跳过创建")
+            return None
+
+        passed, review = self._review_code(code, skill.get("goal", ""))
+        if not passed:
+            Output.warn(f"技能代码质量不过关，跳过创建: {review}")
+            return None
+
         Output.learning(f"正在保存新技能: {name}...")
         self.vault.save_skill(
             name=name,
             goal=skill.get("goal", ""),
             inputs=skill.get("inputs", []),
             steps=skill.get("steps", []),
-            code=skill.get("code", ""),
+            code=code,
             triggers=skill.get("triggers"),
         )
         Output.learning(f"🌱 新技能已创建: {name} — {skill.get('goal', '')}")
         return skill
+
+    @staticmethod
+    def _review_code(code: str, goal: str) -> tuple[bool, str]:
+        """Use LLM to review generated skill code quality.
+
+        Returns (passed, reason). Fail-open: if LLM call errors out,
+        we allow the skill through to avoid blocking on transient failures.
+        """
+        prompt = f"""Review this auto-generated skill code for quality issues.
+
+Goal: {goal}
+
+```python
+{code}
+```
+
+Check for these problems:
+1. Hardcoded results — does the code contain hardcoded analysis text, advice, or conclusions instead of dynamically generating them (via web_fetch + LLM)?
+2. Missing CJK fonts — if it generates PDFs with reportlab, does it register a CJK font (e.g. UnicodeCIDFont, TTFont) for Chinese text?
+3. Wrong output path — does it save files to MONAD_OUTPUT_DIR (injected variable), or does it incorrectly fall back to home directory / current directory?
+4. Bypassing injected tools — does it `import requests` directly instead of using the injected `web_fetch()` function?
+5. Hollow logic — does the core logic actually accomplish the goal, or is it just a template that returns canned text?
+
+Return JSON only:
+{{"pass": true/false, "reason": "one-sentence explanation if failed, empty string if passed"}}"""
+
+        try:
+            response = llm_call(prompt, system="You are a code reviewer. Return valid JSON only.", temperature=0)
+            cleaned = response.strip()
+            if cleaned.startswith("```"):
+                lines = cleaned.split("\n")
+                lines = [l for l in lines if not l.strip().startswith("```")]
+                cleaned = "\n".join(lines)
+            result = json.loads(cleaned)
+            return result.get("pass", True), result.get("reason", "")
+        except Exception:
+            return True, ""
 
     def _build_prompt(self, objective: dict, execution_result: dict,
                       existing_skills: str) -> str:

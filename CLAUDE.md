@@ -205,7 +205,7 @@ Edit files in `~/.monad/knowledge/` (primary) or bundled `monad/knowledge/` (syn
 - `axioms/` - Core behavioral principles
 - `environment/` - World facts (URLs, APIs)
 - `protocols/` - Error handling strategies
-- `skills/` - Reusable skills (built-in: web_to_markdown, parse_document, fetch_topic_news, publish_to_xhs, markdown_to_knowledge_map, start_recording, stop_recording)
+- `skills/` - Reusable skills (built-in: web_to_markdown, parse_document, fetch_topic_news, publish_to_xhs, markdown_to_knowledge_map, markdown_to_pdf, start_recording, stop_recording)
 
 ### Desktop Control
 Requires optional dependency: `pip install monad-core[desktop]`

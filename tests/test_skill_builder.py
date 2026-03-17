@@ -69,18 +69,21 @@ class TestEvaluateAndBuild:
 
     @patch("monad.learning.skill_builder.llm_call")
     def test_create_action(self, mock_llm, builder):
-        mock_llm.return_value = json.dumps({
-            "action": "create",
-            "reason": "new pattern",
-            "skill": {
-                "name": "greet",
-                "goal": "Say hello",
-                "inputs": ["name"],
-                "steps": ["greet user"],
-                "triggers": ["when greeted"],
-                "code": "def run(**kwargs):\n    return 'hi'"
-            }
-        })
+        mock_llm.side_effect = [
+            json.dumps({
+                "action": "create",
+                "reason": "new pattern",
+                "skill": {
+                    "name": "greet",
+                    "goal": "Say hello",
+                    "inputs": ["name"],
+                    "steps": ["greet user"],
+                    "triggers": ["when greeted"],
+                    "code": "def run(**kwargs):\n    return 'hi'"
+                }
+            }),
+            '{"pass": true, "reason": ""}'
+        ]
         result = builder.evaluate_and_build(
             {"goal": "say hi"}, {"success": True, "steps": []})
         assert result is not None
@@ -94,17 +97,20 @@ class TestEvaluateAndBuild:
         builder.vault.save_skill(
             name="existing_skill", goal="Old goal", inputs=["x"], steps=["s"],
             code="def run(**kwargs): pass")
-        mock_llm.return_value = json.dumps({
-            "action": "update",
-            "target": "existing_skill",
-            "reason": "improved",
-            "skill": {
-                "goal": "New goal",
-                "inputs": ["x", "y"],
-                "steps": ["better step"],
-                "code": "def run(**kwargs): return 'v2'"
-            }
-        })
+        mock_llm.side_effect = [
+            json.dumps({
+                "action": "update",
+                "target": "existing_skill",
+                "reason": "improved",
+                "skill": {
+                    "goal": "New goal",
+                    "inputs": ["x", "y"],
+                    "steps": ["better step"],
+                    "code": "def run(**kwargs): return 'v2'"
+                }
+            }),
+            '{"pass": true, "reason": ""}'
+        ]
         result = builder.evaluate_and_build(
             {"goal": "improve"}, {"success": True, "steps": []})
         assert result is not None
@@ -148,6 +154,75 @@ class TestEvaluateAndBuild:
         result = builder.evaluate_and_build(
             {"goal": "test"}, {"success": True, "steps": []})
         assert result is None
+
+
+# ---------------------------------------------------------------------------
+# _review_code (LLM-based quality gate)
+# ---------------------------------------------------------------------------
+
+class TestReviewCode:
+
+    @patch("monad.learning.skill_builder.llm_call")
+    def test_pass(self, mock_llm):
+        mock_llm.return_value = '{"pass": true, "reason": ""}'
+        passed, reason = SkillBuilder._review_code("def run(**kw): return 1", "test")
+        assert passed is True
+        assert reason == ""
+
+    @patch("monad.learning.skill_builder.llm_call")
+    def test_fail(self, mock_llm):
+        mock_llm.return_value = '{"pass": false, "reason": "hardcoded analysis"}'
+        passed, reason = SkillBuilder._review_code("def run(**kw): return 'advice'", "分析")
+        assert passed is False
+        assert "hardcoded" in reason
+
+    @patch("monad.learning.skill_builder.llm_call")
+    def test_fail_open_on_error(self, mock_llm):
+        """LLM call failure should not block skill creation."""
+        mock_llm.side_effect = Exception("API down")
+        passed, reason = SkillBuilder._review_code("def run(**kw): pass", "test")
+        assert passed is True
+
+    @patch("monad.learning.skill_builder.llm_call")
+    def test_markdown_wrapped_json(self, mock_llm):
+        mock_llm.return_value = '```json\n{"pass": false, "reason": "no CJK font"}\n```'
+        passed, reason = SkillBuilder._review_code("def run(**kw): pass", "PDF报告")
+        assert passed is False
+
+    @patch("monad.learning.skill_builder.llm_call")
+    def test_create_blocked_by_review(self, mock_llm, builder):
+        """_handle_create should reject code that fails review."""
+        responses = [
+            json.dumps({
+                "action": "create", "reason": "new",
+                "skill": {"name": "bad_skill", "goal": "分析博主",
+                           "inputs": ["url"], "steps": ["s"],
+                           "code": "def run(**kwargs):\n    return 'hardcoded advice'"}
+            }),
+            '{"pass": false, "reason": "hollow skill with hardcoded content"}'
+        ]
+        mock_llm.side_effect = responses
+        result = builder.evaluate_and_build(
+            {"goal": "分析博主"}, {"success": True, "steps": []})
+        assert result is None
+
+    @patch("monad.learning.skill_builder.llm_call")
+    def test_create_passes_review(self, mock_llm, builder):
+        """_handle_create should accept code that passes review."""
+        responses = [
+            json.dumps({
+                "action": "create", "reason": "new",
+                "skill": {"name": "good_skill", "goal": "fetch data",
+                           "inputs": ["url"], "steps": ["s"],
+                           "code": "def run(**kwargs):\n    return web_fetch(url=kwargs['url'])"}
+            }),
+            '{"pass": true, "reason": ""}'
+        ]
+        mock_llm.side_effect = responses
+        result = builder.evaluate_and_build(
+            {"goal": "fetch data"}, {"success": True, "steps": []})
+        assert result is not None
+        assert result["name"] == "good_skill"
 
 
 # ---------------------------------------------------------------------------

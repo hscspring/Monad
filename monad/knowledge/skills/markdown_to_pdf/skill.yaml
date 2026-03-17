@@ -1,0 +1,19 @@
+name: markdown_to_pdf
+goal: Convert Markdown text (or a .md file) to a well-formatted PDF with CJK font support
+inputs:
+- content: Markdown 文本内容（与 file_path 二选一）
+- file_path: Markdown 文件路径（与 content 二选一）
+- output_filename: 输出文件名（可选，默认 output.pdf），保存到 MONAD_OUTPUT_DIR
+steps:
+- 读取 Markdown 内容（从 content 参数或 file_path 文件）
+- 解析 Markdown 结构（标题 #/##/###、列表、粗体、分隔线、段落）
+- 使用 reportlab 生成 PDF，注册 STSong-Light CJK 字体确保中文正常显示
+- 保存到 MONAD_OUTPUT_DIR 并返回文件路径
+triggers:
+- 用户要求将文本/报告/分析结果输出为 PDF
+- 用户要求生成 PDF 文件
+- 需要把 markdown 内容转为 PDF
+- 生成中文 PDF 报告
+dependencies:
+  python:
+    - reportlab

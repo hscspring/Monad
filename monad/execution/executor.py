@@ -41,23 +41,28 @@ class Executor:
         Returns:
             Result string
         """
+        before = self._snapshot_output_dir()
+
         # Check basic capabilities first
         if capability in self._capabilities:
             try:
-                return self._capabilities[capability](**params)
+                result = self._capabilities[capability](**params)
             except Exception as e:
-                return f"Error executing {capability}: {str(e)}"
+                result = f"Error executing {capability}: {str(e)}"
+        else:
+            # Check learned skills
+            skill_result = self._try_skill(capability, **params)
+            if skill_result is not None:
+                result = skill_result
+            else:
+                result = (
+                    f"Unknown capability: '{capability}'. "
+                    f"Available: {', '.join(self._capabilities.keys())}. "
+                    f"Consider using python_exec to accomplish this."
+                )
 
-        # Check learned skills
-        skill_result = self._try_skill(capability, **params)
-        if skill_result is not None:
-            return skill_result
-
-        return (
-            f"Unknown capability: '{capability}'. "
-            f"Available: {', '.join(self._capabilities.keys())}. "
-            f"Consider using python_exec to accomplish this."
-        )
+        self._announce_new_files(before)
+        return result
 
     def _try_skill(self, skill_name: str, **params) -> str | None:
         """Try to execute a learned skill.
@@ -86,6 +91,10 @@ class Executor:
             module.shell = shell_run
             module.python_exec = python_exec_run
             module.ask_user = ask_user_run
+
+            output_dir = CONFIG.root_dir / "output"
+            output_dir.mkdir(parents=True, exist_ok=True)
+            module.MONAD_OUTPUT_DIR = str(output_dir)
 
             spec.loader.exec_module(module)
 
@@ -136,6 +145,19 @@ class Executor:
                 stderr=subprocess.PIPE,
                 timeout=120,
             )
+
+    _OUTPUT_DIR = CONFIG.root_dir / "output"
+
+    def _snapshot_output_dir(self) -> set[Path]:
+        d = self._OUTPUT_DIR
+        return set(d.iterdir()) if d.exists() else set()
+
+    def _announce_new_files(self, before: set[Path]) -> None:
+        """Emit file_link for any new files created in output dir."""
+        after = self._snapshot_output_dir()
+        for f in sorted(after - before):
+            url = f"/output/{f.name}"
+            Output.file_link(str(f), url)
 
     @property
     def capability_names(self) -> list:
