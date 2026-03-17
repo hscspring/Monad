@@ -454,7 +454,7 @@ class TestActivateAction:
         assert "Activated" in result
         assert "Auto-screenshot" in result
         assert "消息" in result
-        assert "hotkey cmd k" in result
+        assert "click" in result.lower() or "interact" in result.lower()
 
 
 # ---------------------------------------------------------------------------

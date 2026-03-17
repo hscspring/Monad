@@ -110,18 +110,7 @@ REASONER_SYSTEM = _PLATFORM_INFO + """You are MONAD, a rational autonomous agent
      - **只有 click/type/hotkey 才是真正的交互操作**。仅 screenshot 不代表你做了任何事。任务要求你"点击"或"发消息"时，你必须实际执行 click/type 动作。
      - 每次操作后只做一次 screenshot 确认，不要重复截图。一次操作不成功就换方法，不要重试同样的操作。
      - 不要把屏幕上看到的历史文字（如之前执行的日志）当作当前任务的结果。
-     - **搜索场景的 click 陷阱**：在搜索框输入关键词后，OCR 会同时看到搜索框里的输入文字和下方的搜索结果。如果 click 返回了 "Also matched: ..." 替代项，说明有多个匹配。**优先点击搜索结果列表中带上下文的选项**（如 `click 问一问：百合` 而非 `click 百合`），因为搜索框里的文字点了不会跳转。如果 click 后界面没变化，立刻尝试 "Also matched" 中的替代目标。
-     - **搜索结果可见时直接点击**：如果 screenshot 后看到搜索结果中已经有目标联系人/项目（如 "百合"、"问一问：百合"），**直接点击该搜索结果进入**，不要先点其他导航/分类标签（如 "消息"）再去找，那样会跳出搜索页面导致目标消失。
-     - **同名元素有多个位置**：UI 中同一文字可能出现在多个位置（导航栏、侧边栏、搜索分类等）。当 click 返回 "Also matched" 或 "WARNING: N elements match"，仔细看坐标，用 `click_xy <x> <y>` 精确点击你真正想要的那个。
-     - **发消息必须完成全流程**：找到联系人 → 点击进入聊天 → `type <消息内容>` 输入文字 → 发送（Enter 或点击发送按钮）。缺少 `type` 步骤 = 消息没发出去。
-     - **聊天可能已经打开**：如果 screenshot 显示联系人名字出现在窗口顶部（y 坐标很小），这是聊天窗口的标题栏——说明**这个聊天已经打开了**。不需要再搜索或点击联系人，直接 `type <消息>` 输入消息然后 `hotkey return` 发送即可。反复点击标题栏上的名字不会有任何效果。
-     - **"发送给 XXX" 面板**：在飞书/微信 cmd+k 搜索后，点击联系人名字会弹出一个结果卡片，里面有一个"发送给 XXX"按钮。**必须点击这个按钮**才能进入聊天窗口。进入聊天后再 `type <消息>` 输入并 `hotkey return` 发送。不要在这一步做其他操作。
-     - **不要手动点击输入框**：飞书/微信聊天窗口打开后，输入焦点**默认在消息输入框**。直接 `type <消息>` 即可。**绝对不要**点击底部工具栏区域（如 "Aa"、"@"、表情图标、"④"等），那不是输入框——点了会弹出格式菜单或触发系统截图工具。
-     - **各应用搜索快捷键不同**：飞书（Lark）用 `hotkey cmd k`；微信（WeChat）用 `hotkey cmd f`。搜索后必须截图确认搜索框已打开并有结果，再输入联系人名字。
-     - **搜索后必须等待再截图**：`type <联系人名>` 输入搜索词后，**先 `wait 1`，再截图**确认搜索结果已出现。搜索结果是异步渲染的，不等待直接截图可能看不到结果。
-     - **用坐标点击搜索结果**：搜索结果截图出来后，**不要用 `click <联系人名>` 文字匹配**（会匹配到搜索框里的输入文字，而不是下方的结果列表）。**必须看截图里联系人的坐标，用 `click_xy <x> <y>` 精确点击**。联系人名字在结果列表里，y 坐标会明显大于搜索框（搜索框通常 y < 80，联系人结果通常 y > 100）。
-     - **点击后必须等待再截图**：点击联系人或搜索结果后，**先 `wait 1`，再截图**确认界面已切换到聊天。不要连续点击同一个元素——如果截图后界面没变，说明点击位置不对，需要分析元素坐标再重试。
-     - **发消息完整流程**：搜索 → `wait 1` → 截图确认 → 用 `click_xy` 点击结果列表里的联系人 → `wait 1` → 截图确认聊天已打开 → `type <消息内容>` → `hotkey return` 发送 → 截图确认消息已发出。**缺少 `hotkey return` = 消息没发出去。**
+     - **详细用法和注意事项见 desktop_control 工具文档**（已加载到上下文中），包括消息发送流程、搜索快捷键、click 陷阱等。
 
 你还有已学会的技能（skills），可以**直接作为 capability 调用**（和 python_exec、web_fetch 一样），系统会自动注入工具函数和安装依赖。
 **调用已有技能时，永远不要用 python_exec 手动 import，直接用技能名作为 capability！**
@@ -285,6 +274,8 @@ _PLAN_SYSTEM = """将用户请求分解为有序的执行步骤列表。
 - 每个步骤对应一个具体的 action 调用
 - 优先匹配已有技能（如 publish_to_xhs、start_recording），技能是自包含的，调用即完成
 - 没有匹配技能时，用基本能力（web_fetch、python_exec 等）
+- **capability 字段只能填上方列出的技能名或基本能力名，不要编造不存在的名字**
+- 需要通过桌面 UI 操作的步骤（如发消息、操作应用界面），统一用 desktop_control
 - 按执行顺序排列
 - 不要包含"思考""分析""判断"等非 action 步骤"""
 
@@ -313,6 +304,7 @@ class Reasoner:
 
     def __init__(self, vault: KnowledgeVault = None):
         self.vault = vault or KnowledgeVault()
+        self._known_skills: list[str] = self._load_skill_names()
 
     def solve(self, user_input: str, execute_fn=None) -> dict:
         """Solve a user's request through multi-turn reasoning.
@@ -525,7 +517,7 @@ class Reasoner:
                                 f'I auto-executed screenshot for you:\n\n'
                                 f'Observation from desktop_control:\n{auto_result}\n\n'
                                 f'Now interact with the UI: use click <text>, type <text>, '
-                                f'hotkey cmd k (to search contacts), etc.'
+                                f'hotkey <keys>, etc. See desktop_control docs for app-specific shortcuts.'
                             })
                             _recent_action_sigs.clear()
                             continue
@@ -608,6 +600,16 @@ class Reasoner:
                         remaining = self._plan_incomplete_steps(plan)
                         is_complete = not remaining
                         incomplete_reason = "、".join(remaining) if remaining else ""
+                        # Plan says incomplete, but agent may have fulfilled
+                        # those steps via desktop_control (e.g. manual
+                        # messaging instead of calling a skill).  Fall back
+                        # to LLM-based check for a second opinion.
+                        if not is_complete and any(
+                            a.get("capability") == "desktop_control" for a in actions
+                        ):
+                            is_complete, incomplete_reason = self._check_task_completion(
+                                user_input, actions, parsed.get("content", "")
+                            )
                     else:
                         is_complete, incomplete_reason = self._check_task_completion(
                             user_input, actions, parsed.get("content", "")
@@ -718,67 +720,41 @@ class Reasoner:
             action = params.get("action", "")
             if action.startswith("activate") and "foreground" in result.lower():
                 if "Auto-screenshot" in result:
-                    hint = (
+                    return (
                         "[Hint: App is in foreground and UI elements are shown above. "
-                        "Use click/type/hotkey to interact NOW. Do NOT run open/activate/screenshot again."
+                        "Use click/type/hotkey to interact NOW. Do NOT run open/activate/screenshot again. "
+                        "Refer to the desktop_control tool docs for app-specific shortcuts.]"
                     )
-                    if "Feishu" in result or "Lark" in result:
-                        hint += " To search for a contact in Feishu/Lark: hotkey cmd k"
-                    elif "WeChat" in result or "微信" in result:
-                        hint += " To search for a contact in WeChat: hotkey cmd f (NOT cmd+k)"
-                    hint += "]"
-                    return hint
                 return (
                     "[Hint: App is now in foreground. Next: desktop_control screenshot "
                     "to see UI elements, then click/type to interact.]"
                 )
             if action == "screenshot" and "UI elements" in result:
-                # Detect "发送给 XXX" pattern — this is a Feishu/WeChat search result card.
-                # The correct action is to click it to open the chat, then type the message.
                 send_to_match = _re.search(r'["\']发送给\s*(\S+?)["\']', result)
                 if send_to_match:
                     contact = send_to_match.group(1)
                     return (
-                        f'[Hint: Search result shows "发送给{contact}" button. '
-                        f'Click it to open the chat: click 发送给{contact} '
-                        f'— then immediately type your message and press hotkey return to send.]'
+                        f'[Hint: "发送给{contact}" button visible. '
+                        f'Click it to open chat, then type message and hotkey return.]'
                     )
-                # If search box is already open, tell LLM to type the contact name
                 search_open = any(kw in result for kw in ("Search", "搜索", "search"))
                 if search_open:
-                    # Extract contact name from user_input for the hint
-                    hint = (
-                        "[Hint: The SEARCH BOX is already open. "
-                        "Do NOT click the search box. Do NOT type the message yet. "
-                        "Type the CONTACT NAME to search: desktop_control type <contact_name>. "
-                        "Then wait 1 second and screenshot to see results. "
-                        "Only after finding and clicking the contact should you type the message.]"
+                    return (
+                        "[Hint: Search box is open. Type the CONTACT NAME to search, "
+                        "then wait 1 + screenshot to see results. "
+                        "Do NOT type the message content yet.]"
                     )
-                else:
-                    hint = (
-                        "[Hint: You can now see the screen. Use click <text> to click a button, "
-                        "type <text> to enter text, or hotkey to press keys. "
-                        "Do NOT take another screenshot until you've performed an action."
-                    )
-                    if "Feishu" in result or "Lark" in result:
-                        hint += (
-                            " To search for a contact in Feishu/Lark: use 'hotkey cmd k'."
-                        )
-                    elif "WeChat" in result or "微信" in result:
-                        hint += (
-                            " To search for a contact in WeChat: use 'hotkey cmd f' "
-                            "(NOT cmd+k — WeChat uses cmd+f for search)."
-                        )
-                hint += "]"
-                return hint
+                return (
+                    "[Hint: Screen captured. Use click/type/hotkey to interact. "
+                    "Do NOT take another screenshot until you've performed an action. "
+                    "Refer to desktop_control tool docs for app-specific workflows.]"
+                )
             if action.startswith("hotkey") and "Pressed hotkey" in result:
                 keys = action.replace("hotkey", "").strip().lower()
                 if keys in ("cmd f", "cmd k"):
                     return (
-                        "[Hint: Search shortcut pressed. The search box should now be open. "
-                        "Your next step: type the CONTACT NAME (not the message). "
-                        "Example: desktop_control type 太笨不会起. "
-                        "Do NOT click the search box, do NOT type the message content yet.]"
+                        "[Hint: Search shortcut pressed. Now type the CONTACT NAME (not the message). "
+                        "Then wait 1 + screenshot to see results.]"
                     )
             if action.startswith("wait") and "Waited" in result:
                 return (
@@ -933,18 +909,21 @@ class Reasoner:
         except Exception:
             return (True, "")
 
+    def _load_skill_names(self) -> list[str]:
+        """Extract skill names from vault for plan validation."""
+        names = []
+        for line in self.vault.load_skills().split("\n"):
+            if line.startswith("Skill: "):
+                names.append(line[7:].strip())
+        return names
+
     def _decompose_task(self, user_input: str) -> list[dict]:
         """Decompose user request into an ordered step plan via LLM.
 
         Returns list of {"step": str, "capability": str, "done": bool}.
         Returns empty list on failure (graceful degradation).
         """
-        skills_text = self.vault.load_skills()
-        skill_names = []
-        for line in skills_text.split("\n"):
-            if line.startswith("Skill: "):
-                skill_names.append(line[7:].strip())
-        skills_summary = ", ".join(skill_names) if skill_names else "(无)"
+        skills_summary = ", ".join(self._known_skills) if self._known_skills else "(无)"
 
         system = _PLAN_SYSTEM.format(skills=skills_summary)
         try:
@@ -966,14 +945,24 @@ class Reasoner:
                 {"step": s.get("step", ""), "capability": s.get("capability", ""), "done": False}
                 for s in steps if isinstance(s, dict) and s.get("step")
             ]
-        except Exception:
+        except Exception as exc:
+            Output.warn(f"任务分解失败 ({exc.__class__.__name__}: {exc})，将作为单步任务执行")
             return []
 
-    @staticmethod
-    def _update_plan(plan: list[dict], capability: str) -> None:
+    _BASIC_CAPABILITIES = {"python_exec", "shell", "web_fetch", "ask_user", "desktop_control"}
+
+    def _update_plan(self, plan: list[dict], capability: str) -> None:
         """Mark the first matching undone step as done."""
         for step in plan:
             if not step["done"] and step["capability"] == capability:
+                step["done"] = True
+                return
+        # Fallback: if the plan used a hallucinated capability name (e.g.
+        # "send_wechat_message") and we're using desktop_control or another
+        # real capability, match the first undone step whose tag is unknown.
+        known = self._BASIC_CAPABILITIES | set(self._known_skills)
+        for step in plan:
+            if not step["done"] and step["capability"] not in known:
                 step["done"] = True
                 return
 

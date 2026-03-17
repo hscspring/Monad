@@ -533,7 +533,7 @@ def run(action: str = "", **kwargs) -> str:
                      f"[Auto-screenshot of {scope}] Found {len(elements)} UI elements:"]
             for e in elements:
                 lines.append(f'  "{e["text"]}" at ({e["x"]},{e["y"]}) size {e["width"]}x{e["height"]}')
-            lines.append("\nNow use click/type/hotkey to interact. To search for a contact: hotkey cmd f")
+            lines.append("\nNow use click/type/hotkey to interact.")
             return "\n".join(lines)
 
         elif cmd == "screenshot":

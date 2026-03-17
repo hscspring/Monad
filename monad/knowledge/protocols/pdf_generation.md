@@ -1,48 +1,65 @@
-# Protocol: PDF 生成（中文支持）
+# Protocol: PDF 生成
 
-当需要生成包含中文的 PDF 文件时，按以下流程处理：
+## 首选方案：使用 markdown_to_pdf 技能
 
-## 推荐方案：reportlab + CJK 字体
+当需要生成 PDF 报告时，**优先使用 `markdown_to_pdf` 技能**，不要手写 reportlab 代码。
 
-reportlab 内置 CJK 字体支持，无需额外安装系统依赖。
+### 正确流程
 
-```python
-from reportlab.lib.pagesizes import A4
-from reportlab.lib.styles import ParagraphStyle
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+1. 用 `python_exec` 生成 Markdown 格式的报告内容（字符串）
+2. 调用 `markdown_to_pdf` 技能，传入 `content` 参数
 
-# 注册中文字体（reportlab 内置，无需额外文件）
-pdfmetrics.registerFont(UnicodeCIDFont('STSong-Light'))
-
-# 创建中文样式
-cn_style = ParagraphStyle(
-    'Chinese', fontName='STSong-Light', fontSize=12, leading=18
-)
-cn_title = ParagraphStyle(
-    'ChineseTitle', fontName='STSong-Light', fontSize=18,
-    leading=24, spaceAfter=12, alignment=1  # 居中
-)
-cn_heading = ParagraphStyle(
-    'ChineseHeading', fontName='STSong-Light', fontSize=14,
-    leading=20, spaceAfter=10, spaceBefore=10
-)
+```json
+{"type": "action", "capability": "markdown_to_pdf", "params": {"content": "# 报告标题\n\n## 第一章\n\n正文内容...", "output_filename": "report.pdf"}}
 ```
 
-## 常见错误
+### markdown_to_pdf 支持的格式
 
-| 错误 | 原因 | 解决方案 |
-|------|------|----------|
-| fpdf 中文乱码 | fpdf 1.x 仅支持 Latin-1 | 改用 reportlab |
-| weasyprint import 失败 | 缺少 pango/cairo 系统库 | 改用 reportlab（纯 Python） |
-| reportlab 中文显示为方框 | 未注册 CJK 字体 | 用 UnicodeCIDFont('STSong-Light') |
-| reportlab 未安装 | 缺少依赖 | pip install reportlab |
+- 标题：`#`、`##`、`###`
+- 粗体：`**文字**`
+- 斜体：`*文字*`
+- 行内代码：`` `code` ``
+- 列表：`- item` 或 `* item`
+- 分隔线：`---`
+- 段落：空行分隔
 
-## 关键规则
+### 典型用法
 
-- **不要用 fpdf**：不支持中文
-- **不要用 weasyprint**：依赖系统 C 库，安装复杂
-- **reportlab 是首选**：纯 Python，内置 CJK 字体，pip install 即可
-- 所有 Paragraph 的 fontName 都必须设为 CJK 字体，包括标题、正文、列表项
-- **长报告必须先写文件再执行**：PDF 生成代码通常超过 80 行，直接放在 python_exec 的 code 字段会导致 JSON 输出被截断。正确做法：先用 python_exec 把完整的 .py 脚本 write 到文件，再用 shell `python /path/to/script.py` 执行
+先用 python_exec 把分析结果组织成 markdown 字符串，保存到变量或文件：
+
+```python
+report = """# 分析报告
+
+## 概要
+
+这是报告正文...
+
+## 详细分析
+
+- 要点一
+- 要点二
+
+---
+
+*报告由 MONAD 生成*
+"""
+# 写到文件供 markdown_to_pdf 读取
+with open(os.path.join(MONAD_OUTPUT_DIR, "report.md"), "w") as f:
+    f.write(report)
+print(report)
+```
+
+然后调用技能：
+
+```json
+{"type": "action", "capability": "markdown_to_pdf", "params": {"file_path": "~/.monad/output/report.md", "output_filename": "report.pdf"}}
+```
+
+## 仅当 markdown_to_pdf 不可用时：手写 reportlab
+
+如果技能不可用，才考虑手写代码。关键规则：
+
+- 使用 `reportlab` + `UnicodeCIDFont('STSong-Light')` 确保中文显示
+- **不要用 fpdf**（不支持中文）、**不要用 weasyprint**（依赖系统 C 库）
+- **不要用 STHeiti-Regular**（reportlab 不支持），只用 `STSong-Light`
+- 长代码必须先写到 `.py` 文件再用 shell 执行（python_exec 有 80 行限制）

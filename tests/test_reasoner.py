@@ -224,19 +224,18 @@ class TestActionHint:
                   '[Auto-screenshot of Feishu window] Found 20 UI elements:')
         hint = reasoner._action_hint("desktop_control", {"action": "activate Lark"}, result)
         assert "click" in hint.lower() or "interact" in hint.lower()
-        assert "open" not in hint.lower() or "Do NOT" in hint
-        assert "cmd k" in hint
+        assert "Do NOT" in hint
+        assert "desktop_control" in hint
 
     def test_screenshot_hint(self, reasoner):
         hint = reasoner._action_hint("desktop_control", {"action": "screenshot"},
                                      '[Frontmost app: Lark] Found 20 UI elements (full screen):')
-        assert "click" in hint
-        assert "Do NOT take another screenshot" in hint
+        assert "click" in hint.lower() or "interact" in hint.lower()
 
-    def test_screenshot_hint_messaging_app(self, reasoner):
+    def test_screenshot_hint_generic(self, reasoner):
         hint = reasoner._action_hint("desktop_control", {"action": "screenshot"},
                                      '[Feishu window] Found 20 UI elements:')
-        assert "hotkey cmd k" in hint
+        assert "desktop_control" in hint or "click" in hint.lower()
 
     def test_click_with_also_matched_hint(self, reasoner):
         hint = reasoner._action_hint(
@@ -244,11 +243,11 @@ class TestActionHint:
             'Clicked "消息" at (34,340). Also matched: "消息" at (111,146)')
         assert "Also matched" in hint or "alternatives" in hint.lower()
 
-    def test_click_no_alternatives_no_hint(self, reasoner):
+    def test_click_success_gives_wait_hint(self, reasoner):
         hint = reasoner._action_hint(
             "desktop_control", {"action": "click File"},
             'Clicked "File" at (50,10).')
-        assert hint == ""
+        assert "wait" in hint.lower()
 
     def test_click_send_to_opens_chat(self, reasoner):
         """After clicking '发送给百合', hint should say 'type message', not 'click again'."""
@@ -344,8 +343,56 @@ class TestPlatformInfo:
     def test_system_prompt_warns_against_split_params(self):
         assert "click 搜索" in REASONER_SYSTEM
 
-    def test_system_prompt_warns_search_result_direct_click(self):
-        assert "直接点击该搜索结果" in REASONER_SYSTEM
+    def test_system_prompt_references_tool_docs(self):
+        assert "desktop_control" in REASONER_SYSTEM and "工具文档" in REASONER_SYSTEM
 
-    def test_system_prompt_warns_messaging_needs_type(self):
-        assert "type" in REASONER_SYSTEM and "发消息必须完成全流程" in REASONER_SYSTEM
+    def test_desktop_control_doc_has_messaging_rules(self):
+        from pathlib import Path
+        doc = Path(__file__).resolve().parent.parent / "monad" / "knowledge" / "tools" / "desktop_control.md"
+        text = doc.read_text()
+        assert "发消息必须完成全流程" in text
+        assert "cmd k" in text
+        assert "cmd f" in text
+        assert "不要点击输入框" in text
+
+
+# ---------------------------------------------------------------------------
+# _update_plan (plan progress tracking)
+# ---------------------------------------------------------------------------
+
+class TestUpdatePlan:
+
+    def test_exact_match(self, reasoner):
+        plan = [
+            {"step": "录屏", "capability": "start_recording", "done": False},
+            {"step": "发消息", "capability": "desktop_control", "done": False},
+        ]
+        reasoner._update_plan(plan, "start_recording")
+        assert plan[0]["done"] is True
+        assert plan[1]["done"] is False
+
+    def test_fuzzy_match_hallucinated_capability(self, reasoner):
+        """desktop_control should satisfy steps tagged with non-existent capabilities."""
+        plan = [
+            {"step": "录屏", "capability": "start_recording", "done": True},
+            {"step": "发消息", "capability": "send_feishu_msg", "done": False},
+            {"step": "停止录屏", "capability": "stop_recording", "done": False},
+        ]
+        reasoner._update_plan(plan, "desktop_control")
+        assert plan[1]["done"] is True
+        assert plan[2]["done"] is False
+
+    def test_no_match_does_nothing(self, reasoner):
+        plan = [
+            {"step": "录屏", "capability": "start_recording", "done": False},
+        ]
+        reasoner._update_plan(plan, "web_fetch")
+        assert plan[0]["done"] is False
+
+    def test_fuzzy_does_not_match_real_capabilities(self, reasoner):
+        """Fuzzy match should NOT override steps tagged with real capability names."""
+        plan = [
+            {"step": "抓网页", "capability": "web_fetch", "done": False},
+        ]
+        reasoner._update_plan(plan, "desktop_control")
+        assert plan[0]["done"] is False

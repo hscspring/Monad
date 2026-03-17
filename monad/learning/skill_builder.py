@@ -46,12 +46,14 @@ IMPORTANT — when to SKIP (do NOT create skills for these):
 - Analyzing a SPECIFIC person, website, or entity (e.g. "分析 yam.gift 博主" → skip, because the analysis content is unique each time and cannot be hardcoded)
 - Tasks where the core value is LLM reasoning/analysis, not repeatable code logic
 - Any skill that would need to hardcode analysis results, advice, or conclusions — that's a hollow skill
+- **Desktop automation tasks** (e.g. sending messages via Feishu/WeChat/Lark, clicking UI elements): these require real-time visual feedback loops (screenshot → analyze → decide) that CANNOT be pre-scripted. The LLM reasoning loop with desktop_control handles these dynamically. A skill with hardcoded sleep() + click sequences is ALWAYS hollow.
 
 Code quality requirements:
 - For analysis/report tasks: the code MUST call web_fetch() or shell() to fetch real data, and MUST use LLM to generate analysis — NEVER hardcode analysis text
 - For PDF tasks: MUST register CJK fonts (UnicodeCIDFont('STSong-Light')) for Chinese support
 - MUST save output to MONAD_OUTPUT_DIR, not to the home directory or current directory
-- MUST use injected tools (web_fetch, shell) instead of importing requests directly"""
+- MUST use injected tools (web_fetch, shell) instead of importing requests directly
+- NEVER create skills that call desktop_control() in a fixed sequence — desktop automation needs adaptive LLM reasoning"""
 
 
 class SkillBuilder:
@@ -185,6 +187,7 @@ Check for these problems:
 3. Wrong output path — does it save files to MONAD_OUTPUT_DIR (injected variable), or does it incorrectly fall back to home directory / current directory?
 4. Bypassing injected tools — does it `import requests` directly instead of using the injected `web_fetch()` function?
 5. Hollow logic — does the core logic actually accomplish the goal, or is it just a template that returns canned text?
+6. Desktop automation anti-pattern — does the code call desktop_control() in a hardcoded sequence with time.sleep()? Desktop UI automation requires real-time visual feedback (screenshot → analyze → decide) that cannot be pre-scripted. Such skills are ALWAYS hollow.
 
 Return JSON only:
 {{"pass": true/false, "reason": "one-sentence explanation if failed, empty string if passed"}}"""
