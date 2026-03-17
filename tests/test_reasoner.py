@@ -250,6 +250,23 @@ class TestActionHint:
             'Clicked "File" at (50,10).')
         assert hint == ""
 
+    def test_click_send_to_opens_chat(self, reasoner):
+        """After clicking '发送给百合', hint should say 'type message', not 'click again'."""
+        hint = Reasoner._action_hint(
+            "desktop_control", {"action": "click 发送给百合"},
+            'Clicked "发送给百合" at (681,703).',
+            user_input='给百合发个"你好"')
+        assert "type" in hint
+        assert "你好" in hint
+        assert "click 发送给" not in hint
+
+    def test_click_shows_send_to_card(self, reasoner):
+        """After clicking a contact, if '发送给' appears, hint should say 'click it'."""
+        hint = Reasoner._action_hint(
+            "desktop_control", {"action": "click_xy 288 291"},
+            'Clicked at (288,291). "发送给百合" visible.')
+        assert "click 发送给百合" in hint
+
     def test_unrelated_command_no_hint(self, reasoner):
         hint = reasoner._action_hint("shell", {"command": "ls -la"}, "file1\nfile2")
         assert hint == ""

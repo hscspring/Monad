@@ -116,6 +116,7 @@ REASONER_SYSTEM = _PLATFORM_INFO + """You are MONAD, a rational autonomous agent
      - **发消息必须完成全流程**：找到联系人 → 点击进入聊天 → `type <消息内容>` 输入文字 → 发送（Enter 或点击发送按钮）。缺少 `type` 步骤 = 消息没发出去。
      - **聊天可能已经打开**：如果 screenshot 显示联系人名字出现在窗口顶部（y 坐标很小），这是聊天窗口的标题栏——说明**这个聊天已经打开了**。不需要再搜索或点击联系人，直接 `type <消息>` 输入消息然后 `hotkey return` 发送即可。反复点击标题栏上的名字不会有任何效果。
      - **"发送给 XXX" 面板**：在飞书/微信 cmd+k 搜索后，点击联系人名字会弹出一个结果卡片，里面有一个"发送给 XXX"按钮。**必须点击这个按钮**才能进入聊天窗口。进入聊天后再 `type <消息>` 输入并 `hotkey return` 发送。不要在这一步做其他操作。
+     - **不要手动点击输入框**：飞书/微信聊天窗口打开后，输入焦点**默认在消息输入框**。直接 `type <消息>` 即可。**绝对不要**点击底部工具栏区域（如 "Aa"、"@"、表情图标、"④"等），那不是输入框——点了会弹出格式菜单或触发系统截图工具。
      - **各应用搜索快捷键不同**：飞书（Lark）用 `hotkey cmd k`；微信（WeChat）用 `hotkey cmd f`。搜索后必须截图确认搜索框已打开并有结果，再输入联系人名字。
      - **搜索后必须等待再截图**：`type <联系人名>` 输入搜索词后，**先 `wait 1`，再截图**确认搜索结果已出现。搜索结果是异步渲染的，不等待直接截图可能看不到结果。
      - **用坐标点击搜索结果**：搜索结果截图出来后，**不要用 `click <联系人名>` 文字匹配**（会匹配到搜索框里的输入文字，而不是下方的结果列表）。**必须看截图里联系人的坐标，用 `click_xy <x> <y>` 精确点击**。联系人名字在结果列表里，y 坐标会明显大于搜索框（搜索框通常 y < 80，联系人结果通常 y > 100）。
@@ -805,11 +806,26 @@ class Reasoner:
                 send_to_match = _re.search(r'["\']发送给\s*(\S+?)["\']', result)
                 if send_to_match:
                     contact = send_to_match.group(1)
-                    return (
-                        f'[Hint: Click succeeded and "发送给{contact}" is visible. '
-                        f'This is the search result card. Click it: click 发送给{contact} '
-                        f'— then type your message and hotkey return to send.]'
-                    )
+                    if "发送给" in action:
+                        # LLM already clicked the "发送给" button → chat is now open
+                        import re as _re2
+                        msg_match = _re2.search(r'[""「\'"]([^"""\'」]{1,50})[""」\'"]', user_input)
+                        msg = msg_match.group(1) if msg_match else "<消息内容>"
+                        return (
+                            f'[Hint: "发送给{contact}" clicked — chat is now open. '
+                            f'The input box is already focused. Do these steps IN ORDER:\n'
+                            f'1. desktop_control wait 1\n'
+                            f'2. desktop_control type {msg}\n'
+                            f'3. desktop_control hotkey return\n'
+                            f'Do NOT click the input area, do NOT screenshot first, just type directly.]'
+                        )
+                    else:
+                        # Some other click caused "发送给" to appear → tell LLM to click it
+                        return (
+                            f'[Hint: Click succeeded and "发送给{contact}" button appeared. '
+                            f'Click it to open the chat: click 发送给{contact} '
+                            f'— then type your message and hotkey return to send.]'
+                        )
             if action.startswith("click") and "WARNING: Only one" in result and "SEARCH INPUT" in result:
                 # Clicked what is likely the search input text, not the result below.
                 # Instruct LLM to wait and screenshot to find the result list.
