@@ -8,6 +8,8 @@ steps:
 - Extract title, metadata, and body content
 - Convert structural elements to Markdown syntax
 - Return clean Markdown string
+outputs:
+  markdown: 网页内容转换后的 Markdown 文本
 triggers:
 - 用户给了一个 URL 并要求转成 markdown
 - 用户要求保存/导出某篇网页文章

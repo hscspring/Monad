@@ -221,3 +221,80 @@ class TestEnsureSkillDeps:
         skill_dir = tmp_path / "empty_skill"
         skill_dir.mkdir(parents=True)
         executor._ensure_skill_deps(skill_dir)
+
+
+# ---------------------------------------------------------------------------
+# Template resolution for composition.steps
+# ---------------------------------------------------------------------------
+
+class TestResolveTemplates:
+
+    def test_kwargs_substitution(self, executor):
+        raw = {"url": "{{kwargs.url}}", "title": "fixed"}
+        result = executor._resolve_templates(raw, {"url": "https://example.com"}, {})
+        assert result == {"url": "https://example.com", "title": "fixed"}
+
+    def test_step_result_substitution(self, executor):
+        raw = {"content": "{{web_to_markdown}}"}
+        step_results = {"web_to_markdown": "# Hello World"}
+        result = executor._resolve_templates(raw, {}, step_results)
+        assert result == {"content": "# Hello World"}
+
+    def test_missing_ref_kept_as_is(self, executor):
+        raw = {"x": "{{kwargs.missing}}"}
+        result = executor._resolve_templates(raw, {}, {})
+        assert result == {"x": "{{kwargs.missing}}"}
+
+    def test_non_string_values_preserved(self, executor):
+        raw = {"count": 42, "flag": True}
+        result = executor._resolve_templates(raw, {}, {})
+        assert result == {"count": 42, "flag": True}
+
+    def test_mixed_template_and_text(self, executor):
+        raw = {"msg": "Hello {{kwargs.name}}, welcome!"}
+        result = executor._resolve_templates(raw, {"name": "Alice"}, {})
+        assert result == {"msg": "Hello Alice, welcome!"}
+
+
+class TestCompositionSteps:
+
+    def test_steps_with_param_mapping(self, executor, tmp_path, monkeypatch):
+        from monad.config import CONFIG
+        monkeypatch.setattr(CONFIG, "root_dir", tmp_path)
+
+        # Create skill_a
+        a_dir = tmp_path / "knowledge" / "skills" / "skill_a"
+        a_dir.mkdir(parents=True)
+        (a_dir / "skill.yaml").write_text(
+            yaml.dump({"name": "skill_a", "goal": "a", "inputs": ["url"], "steps": ["fetch"]}),
+            encoding="utf-8")
+        (a_dir / "executor.py").write_text(
+            "def run(**kw):\n    return f\"fetched:{kw.get('url', '')}\"", encoding="utf-8")
+
+        # Create skill_b
+        b_dir = tmp_path / "knowledge" / "skills" / "skill_b"
+        b_dir.mkdir(parents=True)
+        (b_dir / "skill.yaml").write_text(
+            yaml.dump({"name": "skill_b", "goal": "b", "inputs": ["content"], "steps": ["process"]}),
+            encoding="utf-8")
+        (b_dir / "executor.py").write_text(
+            "def run(**kw):\n    return f\"processed:{kw.get('content', '')}\"", encoding="utf-8")
+
+        # Create composite skill
+        comp_dir = tmp_path / "knowledge" / "skills" / "pipeline"
+        comp_dir.mkdir(parents=True)
+        (comp_dir / "skill.yaml").write_text(
+            yaml.dump({
+                "name": "pipeline", "goal": "chain", "inputs": ["url"],
+                "steps": ["fetch then process"],
+                "composition": {
+                    "steps": [
+                        {"skill": "skill_a", "params": {"url": "{{kwargs.url}}"}},
+                        {"skill": "skill_b", "params": {"content": "{{skill_a}}"}},
+                    ]
+                }
+            }), encoding="utf-8")
+
+        result = executor.execute("pipeline", url="https://test.com")
+        assert "fetched:https://test.com" in result
+        assert "processed:fetched:https://test.com" in result

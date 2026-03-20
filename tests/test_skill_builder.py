@@ -216,6 +216,12 @@ class TestEvaluateAndBuild:
 
     @patch("monad.learning.skill_builder.llm_call")
     def test_create_composition_only_no_second_llm(self, mock_llm, builder):
+        # Pre-create sub-skills so composition validation passes
+        builder.vault.save_skill("other_a", goal="a", inputs=["q"], steps=["do a"],
+                                 code="def run(**kw): return 'a'")
+        builder.vault.save_skill("other_b", goal="b", inputs=["q"], steps=["do b"],
+                                 code="def run(**kw): return 'b'")
+
         mock_llm.return_value = json.dumps(
             {
                 "action": "create",
@@ -389,6 +395,41 @@ class TestDependencyPassing:
         assert "dependencies" not in data
 
 
+class TestValidateComposition:
+
+    def test_valid_sequence(self, builder):
+        builder.vault.save_skill("s_a", goal="a", inputs=[], steps=["a"],
+                                 code="def run(**kw): pass")
+        builder.vault.save_skill("s_b", goal="b", inputs=[], steps=["b"],
+                                 code="def run(**kw): pass")
+        assert builder._validate_composition({"sequence": ["s_a", "s_b"]}) is True
+
+    def test_missing_sub_skill(self, builder):
+        builder.vault.save_skill("s_a", goal="a", inputs=[], steps=["a"],
+                                 code="def run(**kw): pass")
+        assert builder._validate_composition({"sequence": ["s_a", "nonexistent"]}) is False
+
+    def test_valid_steps(self, builder):
+        builder.vault.save_skill("skill_x", goal="x", inputs=[], steps=["x"],
+                                 code="def run(**kw): pass")
+        builder.vault.save_skill("skill_y", goal="y", inputs=[], steps=["y"],
+                                 code="def run(**kw): pass")
+        comp = {"steps": [
+            {"skill": "skill_x", "params": {"url": "{{kwargs.url}}"}},
+            {"skill": "skill_y", "params": {"content": "{{skill_x}}"}},
+        ]}
+        assert builder._validate_composition(comp) is True
+
+    def test_invalid_steps_missing_skill(self, builder):
+        builder.vault.save_skill("skill_x", goal="x", inputs=[], steps=["x"],
+                                 code="def run(**kw): pass")
+        comp = {"steps": [
+            {"skill": "skill_x", "params": {}},
+            {"skill": "missing_y", "params": {}},
+        ]}
+        assert builder._validate_composition(comp) is False
+
+
 class TestSystemPrompt:
 
     def test_system_prompt_has_json_formats(self):
@@ -396,3 +437,10 @@ class TestSystemPrompt:
         assert '"action": "create"' in SKILL_BUILDER_SYSTEM
         assert '"action": "update"' in SKILL_BUILDER_SYSTEM
         assert "composition" in SKILL_BUILDER_SYSTEM
+
+    def test_system_prompt_has_outputs(self):
+        assert '"outputs"' in SKILL_BUILDER_SYSTEM
+
+    def test_system_prompt_has_steps_template(self):
+        assert "{{kwargs." in SKILL_BUILDER_SYSTEM
+        assert "{{web_to_markdown}}" in SKILL_BUILDER_SYSTEM

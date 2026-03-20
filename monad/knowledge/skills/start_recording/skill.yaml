@@ -7,6 +7,9 @@ steps:
   - 用 ffmpeg -f avfoundation 以 MKV 容器后台录制屏幕（MKV 无 moov atom 问题，SIGKILL 后仍可播放）
   - 将 pid、mkv路径、开始时间写入 ~/.monad/cache/recording_state.json
   - 立即返回录制已开始的确认信息（含 pid 和文件路径）
+outputs:
+  pid: ffmpeg 进程 ID
+  mkv_path: 录制中的 MKV 文件路径
 triggers:
   - 用户说"开始录屏"、"帮我录制屏幕"、"start recording"
   - 需要录制演示视频或操作过程之前

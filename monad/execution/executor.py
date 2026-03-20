@@ -5,6 +5,7 @@ Executes basic capabilities (python_exec, shell, web_fetch, ask_user) and learne
 
 import importlib
 import importlib.util
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -91,6 +92,13 @@ class Executor:
                 pass
 
         comp = data.get("composition") if isinstance(data.get("composition"), dict) else {}
+
+        steps = comp.get("steps")
+        if isinstance(steps, list) and steps:
+            return self._run_composition_steps(
+                skill_name, steps, params, task_state=task_state,
+            )
+
         seq = comp.get("sequence")
         if isinstance(seq, list) and seq:
             parts: list[str] = []
@@ -109,6 +117,57 @@ class Executor:
         self._ensure_skill_deps(skill_dir)
         return self._load_and_run_skill(skill_name, executor_path, params,
                                         task_state=task_state)
+
+    def _run_composition_steps(
+        self,
+        pipeline_name: str,
+        steps: list[dict],
+        kwargs: dict,
+        task_state=None,
+    ) -> str:
+        """Execute composition.steps with template-based parameter mapping.
+
+        Templates:
+            {{kwargs.param}}  — resolved from the caller's kwargs
+            {{skill_name}}    — resolved from a previous step's return value
+        """
+        step_results: dict[str, str] = {}
+        parts: list[str] = []
+
+        for i, step in enumerate(steps[:16]):
+            if not isinstance(step, dict):
+                continue
+            sub_skill = step.get("skill", "")
+            if not sub_skill:
+                continue
+
+            raw_params = step.get("params", {})
+            resolved = self._resolve_templates(raw_params, kwargs, step_results)
+
+            parts.append(f"--- {pipeline_name} step {i + 1}: {sub_skill} ---")
+            result = self.execute(sub_skill, task_state=task_state, **resolved)
+            step_results[sub_skill] = result
+            parts.append(result)
+
+        return "\n".join(parts)
+
+    @staticmethod
+    def _resolve_templates(
+        raw_params: dict, kwargs: dict, step_results: dict[str, str]
+    ) -> dict:
+        """Replace {{kwargs.X}} and {{skill_name}} placeholders in param values."""
+        resolved = {}
+        for key, val in raw_params.items():
+            if not isinstance(val, str):
+                resolved[key] = val
+                continue
+            def _replacer(m: re.Match) -> str:
+                ref = m.group(1).strip()
+                if ref.startswith("kwargs."):
+                    return str(kwargs.get(ref[7:], m.group(0)))
+                return step_results.get(ref, m.group(0))
+            resolved[key] = re.sub(r"\{\{(.+?)\}\}", _replacer, val)
+        return resolved
 
     def _load_and_run_skill(self, skill_name: str, executor_path: Path,
                             params: dict, task_state=None) -> str:

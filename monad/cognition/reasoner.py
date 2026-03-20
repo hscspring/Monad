@@ -537,7 +537,11 @@ class Reasoner:
 
         if knowledge.get("user_context"):
             sections.append(f"## Known User Context\n{knowledge['user_context']}")
-            Output.system(f"已加载用户记忆 ({len(knowledge['user_context'])} 字符)")
+            Output.system(f"已加载用户上下文 ({len(knowledge['user_context'])} 字符)")
+
+        if knowledge.get("schedule"):
+            sections.append(f"## Today's Schedule\n{knowledge['schedule']}")
+            Output.system(f"已加载今日日程 ({len(knowledge['schedule'])} 字符)")
 
         if knowledge.get("protocols"):
             sections.append(f"## Behavioral Protocols\n{knowledge['protocols']}")

@@ -7,6 +7,8 @@ steps:
 - Search for news about the topic using Bing or Google News
 - Parse the search results to extract article titles, sources, and URLs
 - Return formatted news results
+outputs:
+  news: 格式化的新闻列表（标题、来源、链接）
 dependencies:
   python:
     - requests

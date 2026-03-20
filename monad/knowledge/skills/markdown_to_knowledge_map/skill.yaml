@@ -11,6 +11,8 @@ steps:
 - Convert graph to Mermaid diagram with styled nodes
 - Render Mermaid to SVG or PNG via mmdc
 - Return the output file path
+outputs:
+  file_path: 生成的知识图谱图片路径（SVG/PNG）
 triggers:
 - 用户要求将文章/文档/Markdown 生成知识图谱或可视化
 - 用户需要文章的思维导图或流程图

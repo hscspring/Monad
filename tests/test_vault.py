@@ -236,8 +236,10 @@ class TestKnowledgeLoading:
 
     def test_load_all_context_keys(self, vault):
         ctx = vault.load_all_context(query="test")
-        assert set(ctx.keys()) == {"axioms", "environment", "tools", "skills",
-                                    "protocols", "user_context", "experiences"}
+        expected = {"axioms", "environment", "tools", "skills",
+                    "protocols", "user_context", "experiences"}
+        assert expected.issubset(set(ctx.keys()))
+        assert set(ctx.keys()) - expected <= {"schedule"}
 
     def test_save_and_load_record(self, vault):
         path = vault.save_record("task", "process", "ok", notes="note")
@@ -287,3 +289,100 @@ class TestKnowledgeLoading:
 
     def test_load_user_context_empty(self, vault):
         assert vault.load_user_context() == ""
+
+
+# ---------------------------------------------------------------------------
+# User context writers
+# ---------------------------------------------------------------------------
+
+class TestUserContextWriters:
+
+    def test_update_user_facts_appends(self, vault):
+        user_dir = vault.config.user_path
+        user_dir.mkdir(parents=True, exist_ok=True)
+        (user_dir / "facts.md").write_text(
+            "# 用户客观事实与偏好 (Facts)\n\n1. likes Python\n", encoding="utf-8")
+
+        vault.update_user_facts(["uses macOS", "prefers dark mode"])
+        content = (user_dir / "facts.md").read_text(encoding="utf-8")
+        assert "uses macOS" in content
+        assert "prefers dark mode" in content
+        assert "likes Python" in content
+
+    def test_update_user_facts_deduplicates(self, vault):
+        user_dir = vault.config.user_path
+        user_dir.mkdir(parents=True, exist_ok=True)
+        (user_dir / "facts.md").write_text(
+            "# Facts\n\n1. uses macOS\n", encoding="utf-8")
+
+        vault.update_user_facts(["uses macOS", "new fact"])
+        content = (user_dir / "facts.md").read_text(encoding="utf-8")
+        assert content.count("uses macOS") == 1
+        assert "new fact" in content
+
+    def test_update_user_facts_skips_empty(self, vault):
+        user_dir = vault.config.user_path
+        user_dir.mkdir(parents=True, exist_ok=True)
+        (user_dir / "facts.md").write_text("# Facts\n", encoding="utf-8")
+
+        vault.update_user_facts(["", "  "])
+        content = (user_dir / "facts.md").read_text(encoding="utf-8")
+        assert content.strip() == "# Facts"
+
+    def test_update_user_goals(self, vault):
+        vault.update_user_goals(["Build MONAD", "Launch product"])
+        content = (vault.config.user_path / "goals.md").read_text(encoding="utf-8")
+        assert "Build MONAD" in content
+        assert "Launch product" in content
+
+    def test_update_user_goals_empty_resets(self, vault):
+        vault.update_user_goals([])
+        content = (vault.config.user_path / "goals.md").read_text(encoding="utf-8")
+        assert "暂无记录" in content
+
+    def test_update_user_mood(self, vault):
+        vault.update_user_mood("very excited about progress")
+        content = (vault.config.user_path / "mood.md").read_text(encoding="utf-8")
+        assert "very excited" in content
+        assert "Updated:" in content
+
+    def test_update_user_mood_empty_resets(self, vault):
+        vault.update_user_mood("")
+        content = (vault.config.user_path / "mood.md").read_text(encoding="utf-8")
+        assert "暂无记录" in content
+
+
+# ---------------------------------------------------------------------------
+# Skill outputs field
+# ---------------------------------------------------------------------------
+
+class TestSkillOutputs:
+
+    def test_save_skill_with_outputs(self, vault):
+        import yaml
+        vault.save_skill(
+            name="test_skill", goal="test", inputs=["x"],
+            steps=["do"], code="def run(**kw): pass",
+            outputs={"result": "the result"}
+        )
+        yaml_path = vault.config.skills_path / "test_skill" / "skill.yaml"
+        data = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
+        assert data["outputs"] == {"result": "the result"}
+
+    def test_load_skills_shows_outputs(self, vault):
+        vault.save_skill(
+            name="out_skill", goal="produce output", inputs=["x"],
+            steps=["do"], code="def run(**kw): pass",
+            outputs={"file_path": "生成文件路径"}
+        )
+        skills_text = vault.load_skills()
+        assert "Outputs:" in skills_text
+        assert "file_path" in skills_text
+
+    def test_load_skills_no_outputs_no_line(self, vault):
+        vault.save_skill(
+            name="plain_skill", goal="plain", inputs=["x"],
+            steps=["do"], code="def run(**kw): pass"
+        )
+        skills_text = vault.load_skills()
+        assert "Outputs:" not in skills_text

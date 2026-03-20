@@ -7,6 +7,8 @@ steps:
 - Convert the document at file_path
 - Export result to Markdown text
 - Return Markdown content
+outputs:
+  markdown: 文档解析后的 Markdown 文本
 triggers:
 - 用户上传了文件并要求解析或分析
 - 用户给出了文件路径并要求提取内容

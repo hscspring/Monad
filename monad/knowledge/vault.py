@@ -86,12 +86,16 @@ class KnowledgeVault:
                 inputs = data.get("inputs", [])
                 steps = data.get("steps", [])
                 triggers = data.get("triggers", [])
+                outputs = data.get("outputs", {})
                 entry = (
                     f"Skill: {name}\n"
                     f"  Goal: {goal}\n"
                     f"  Inputs: {', '.join(inputs)}\n"
                     f"  Steps: {' → '.join(steps)}"
                 )
+                if outputs and isinstance(outputs, dict):
+                    out_parts = [f"{k}: {v}" for k, v in outputs.items()]
+                    entry += f"\n  Outputs: {'; '.join(out_parts)}"
                 if triggers:
                     entry += f"\n  Triggers: {'; '.join(triggers)}"
                 skills.append(entry)
@@ -141,7 +145,9 @@ class KnowledgeVault:
 
     def load_all_context(self, query: str = "") -> dict:
         """Load all knowledge needed for reasoning."""
-        return {
+        from monad.knowledge.schedule import read_today_schedule
+
+        ctx = {
             "axioms": self.load_axioms(),
             "environment": self.load_environment(),
             "tools": self.load_tools_docs(),
@@ -150,6 +156,10 @@ class KnowledgeVault:
             "user_context": self.load_user_context(),
             "experiences": self.load_experiences(query=query),
         }
+        schedule = read_today_schedule()
+        if schedule:
+            ctx["schedule"] = schedule
+        return ctx
 
     # ── Write Operations ─────────────────────────────────────────
 
@@ -230,7 +240,8 @@ class KnowledgeVault:
     def save_skill(self, name: str, goal: str, inputs: list, steps: list,
                    code: str = "", triggers: list = None,
                    dependencies: dict = None,
-                   composition: dict | None = None) -> Path:
+                   composition: dict | None = None,
+                   outputs: dict | None = None) -> Path:
         """Save a new skill to the skill tree."""
         skill_dir = self.config.skill_dir(name)
         skill_dir.mkdir(parents=True, exist_ok=True)
@@ -247,6 +258,8 @@ class KnowledgeVault:
             skill_data["dependencies"] = dependencies
         if composition:
             skill_data["composition"] = composition
+        if outputs:
+            skill_data["outputs"] = outputs
         yaml_path = skill_dir / "skill.yaml"
         yaml_path.write_text(
             yaml.dump(skill_data, allow_unicode=True, default_flow_style=False),
@@ -258,6 +271,45 @@ class KnowledgeVault:
             exec_path.write_text(code, encoding="utf-8")
 
         return skill_dir
+
+    # ── User Context Writers ────────────────────────────────────
+
+    def update_user_facts(self, new_facts: list[str]) -> Path:
+        """Append new facts to user/facts.md, deduplicating against existing."""
+        path = self.config.user_path / "facts.md"
+        existing = path.read_text(encoding="utf-8") if path.exists() else ""
+        existing_lower = existing.lower()
+        added = []
+        idx = len(existing.strip().split("\n"))
+        for fact in new_facts:
+            fact = fact.strip()
+            if not fact or fact.lower() in existing_lower:
+                continue
+            idx += 1
+            added.append(f"{idx}. {fact}")
+        if added:
+            with open(path, "a", encoding="utf-8") as f:
+                f.write("\n" + "\n".join(added) + "\n")
+        return path
+
+    def update_user_goals(self, new_goals: list[str]) -> Path:
+        """Rewrite user/goals.md with the provided goals list."""
+        path = self.config.user_path / "goals.md"
+        header = "# 用户当前目标与长期项目 (Goals)\n\n"
+        body = "\n".join(f"- {g.strip()}" for g in new_goals if g.strip())
+        if not body:
+            body = "（暂无记录。当用户提到正在进行的重要项目或长期目标时，记录于此以保持上下文连贯。）"
+        path.write_text(header + body + "\n", encoding="utf-8")
+        return path
+
+    def update_user_mood(self, mood: str) -> Path:
+        """Overwrite user/mood.md with the current mood snapshot."""
+        path = self.config.user_path / "mood.md"
+        header = "# 用户当前状态与心情 (Mood/State)\n\n"
+        body = mood.strip() if mood.strip() else "（暂无记录。当用户表达心情、感受或当前所处的临时状态时，记录于此。）"
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M")
+        path.write_text(f"{header}{body}\n\n_Updated: {ts}_\n", encoding="utf-8")
+        return path
 
     def save_to_cache(self, key: str, content: str) -> Path:
         """Save temporary task results to cache."""

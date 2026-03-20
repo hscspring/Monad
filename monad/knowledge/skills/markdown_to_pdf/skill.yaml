@@ -9,6 +9,8 @@ steps:
 - 解析 Markdown 结构（标题 #/##/###、列表、粗体、分隔线、段落）
 - 使用 reportlab 生成 PDF，注册 STSong-Light CJK 字体确保中文正常显示
 - 保存到 MONAD_OUTPUT_DIR 并返回文件路径
+outputs:
+  file_path: 生成的 PDF 文件路径
 triggers:
 - 用户要求将文本/报告/分析结果输出为 PDF
 - 用户要求生成 PDF 文件

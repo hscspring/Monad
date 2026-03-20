@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.1] - 2026-03-19
+
+### Added
+- **Personalizer** (`learning/personalization.py`): Post-task user knowledge extraction. After each successful task, the `Personalizer` calls LLM to identify new user facts, preferences, goals, and mood, then persists them via `vault.update_user_facts/goals/mood`. Integrated into the core loop as the third learner alongside Reflection and SkillBuilder.
+- **Schedule Awareness** (`knowledge/schedule.py`): Reads today's macOS Calendar events and Reminders via `osascript`, injected into the Reasoner's context as `Today's Schedule`. Graceful no-op on non-macOS or missing permissions.
+- **Skill `outputs` field**: All 8 built-in skills now declare their return values in `skill.yaml` via an `outputs` dict (e.g. `outputs: {markdown: "网页内容转换后的 Markdown 文本"}`). `vault.load_skills()` displays outputs in the skill listing; `vault.save_skill()` and `SkillBuilder._save_skill_from_dict` pass through the field.
+- **Composite skill `composition.steps`**: Beyond the simple `composition.sequence` (same kwargs), skills can now declare `composition.steps` with parameter mapping between sub-skills. Template syntax: `{{kwargs.url}}` (caller input), `{{web_to_markdown}}` (previous step result). `Executor._run_composition_steps` + `_resolve_templates` handle resolution.
+- **Vault user context writers**: `update_user_facts(facts)` (incremental append with dedup), `update_user_goals(goals)` (snapshot rewrite), `update_user_mood(mood)` (snapshot with timestamp).
+- **SkillBuilder composition validation**: `_validate_composition` checks that all sub-skills referenced in `sequence` or `steps` actually exist before saving.
+- **SkillBuilder Option D-2**: Enhanced composite skill generation prompt — LLM can now produce `composition.steps` with parameter mapping (in addition to the simpler `composition.sequence`).
+- **`PERSONALIZATION_SYSTEM` prompt** in `prompts.py`: Structured extraction of facts/goals/mood from task interactions.
+- **Tests**: 402 total (up from 341). New `test_personalization.py` (10 tests), `test_schedule.py` (8 tests); expanded `test_vault.py` (user context writers, skill outputs), `test_executor.py` (template resolution, composition steps), `test_skill_builder.py` (composition validation, system prompt checks).
+
+### Changed
+- **Core loop**: Three learners now run in sequence after each successful task: Reflection → SkillBuilder → Personalizer.
+- **Vault `load_all_context`**: Now includes `schedule` key when calendar/reminders data is available.
+- **Reasoner `_build_context`**: Injects `Today's Schedule` section between user context and protocols.
+- **SkillBuilder `_validate_skill_code`**: Composition skills now go through `_validate_composition` (sub-skill existence check) instead of auto-passing.
+
 ## [0.5.0] - 2026-03-19
 
 ### Added

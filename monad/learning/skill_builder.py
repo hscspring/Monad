@@ -34,22 +34,41 @@ Option A — No skill needed:
 
 Option B — Update an existing skill (PREFERRED when there's overlap):
 {"action": "update", "target": "existing_skill_name", "reason": "Why this existing skill should be updated",
- "skill": {"goal": "updated goal description", "inputs": ["param1"], "steps": ["step1"], "triggers": ["trigger1"],
+ "skill": {"goal": "updated goal description", "inputs": ["param1"], "outputs": {"result": "描述返回值"},
+            "steps": ["step1"], "triggers": ["trigger1"],
             "code": "def run(**kwargs):\\n    # updated working Python code\\n    pass"}}
 
 Option C — Create a new skill (ONLY when no existing skill is related):
 {"action": "create", "reason": "Why a new skill is needed",
  "skill": {"name": "skill_name_in_snake_case", "goal": "What this skill accomplishes",
-            "inputs": ["param1"], "steps": ["step1"], "triggers": ["trigger1"],
+            "inputs": ["param1"], "outputs": {"result": "描述返回值"},
+            "steps": ["step1"], "triggers": ["trigger1"],
             "code": "def run(**kwargs):\\n    # working Python code\\n    pass"}}
 
-Option D — Composite skill (orchestration only, v0.5+): chain existing skills with the same kwargs:
+Option D — Composite skill (orchestration only, v0.5+): chain existing skills:
+
+D-1 Simple sequence (all sub-skills share the same kwargs):
 {"action": "create", "reason": "...",
- "skill": {"name": "my_pipeline", "goal": "...", "inputs": ["q"], "steps": ["run A then B"],
+ "skill": {"name": "my_pipeline", "goal": "...", "inputs": ["q"],
+            "outputs": {"result": "最终组合结果"},
+            "steps": ["run A then B"],
             "composition": {"sequence": ["skill_a", "skill_b"]},
             "code": ""}}
 
-Use composition ONLY when the task is clearly a deterministic pipeline of existing skills; leave code empty and list sub-skills in order.
+D-2 Steps with parameter mapping (one skill's output feeds the next):
+{"action": "create", "reason": "...",
+ "skill": {"name": "url_to_pdf", "goal": "Fetch URL and convert to PDF",
+            "inputs": ["url"], "outputs": {"file_path": "生成的 PDF 路径"},
+            "steps": ["fetch page as markdown", "convert markdown to PDF"],
+            "composition": {"steps": [
+                {"skill": "web_to_markdown", "params": {"url": "{{kwargs.url}}"}},
+                {"skill": "markdown_to_pdf", "params": {"content": "{{web_to_markdown}}"}}
+            ]},
+            "code": ""}}
+
+Template syntax: {{kwargs.X}} = caller input, {{skill_name}} = previous step result.
+
+Use composition ONLY when the task is clearly a deterministic pipeline of existing skills; leave code empty.
 
 Rules:
 - ALWAYS prefer "update" over "create" when an existing skill has overlapping functionality.
@@ -160,11 +179,35 @@ class SkillBuilder:
                 Output.warn(f"技能代码未通过执行烟测: {smoke}")
                 return False
             return True
-        if composition:
-            Output.system("组合技能 (composition)：跳过代码审阅与烟测")
-            return True
+        if composition and isinstance(composition, dict):
+            return self._validate_composition(composition)
         Output.warn("技能代码缺少 run() 且无 composition，跳过")
         return False
+
+    def _validate_composition(self, composition: dict) -> bool:
+        """Validate that all sub-skills referenced in a composition exist."""
+        existing = self.vault.load_skills()
+        existing_names = set()
+        for line in existing.split("\n"):
+            if line.startswith("Skill: "):
+                existing_names.add(line.split("Skill: ", 1)[1].split("\n")[0].strip())
+
+        sub_skills: list[str] = []
+        seq = composition.get("sequence")
+        if isinstance(seq, list):
+            sub_skills.extend(s for s in seq if isinstance(s, str))
+        steps = composition.get("steps")
+        if isinstance(steps, list):
+            for step in steps:
+                if isinstance(step, dict) and step.get("skill"):
+                    sub_skills.append(step["skill"])
+
+        missing = [s for s in sub_skills if s not in existing_names]
+        if missing:
+            Output.warn(f"组合技能引用了不存在的子技能: {', '.join(missing)}")
+            return False
+        Output.system(f"组合技能验证通过 (子技能: {', '.join(sub_skills)})")
+        return True
 
     def _save_skill_from_dict(self, name: str, skill: dict, code: str) -> None:
         """Persist a skill to vault from the LLM response dict."""
@@ -177,6 +220,7 @@ class SkillBuilder:
             triggers=skill.get("triggers"),
             dependencies=skill.get("dependencies"),
             composition=skill.get("composition"),
+            outputs=skill.get("outputs"),
         )
 
     @staticmethod

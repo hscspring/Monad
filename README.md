@@ -21,15 +21,15 @@
 
 > **MONAD is not a chatbot or a simple tool-matcher.** It is a self-learning, objective-driven autonomous rational agent core.
 
-Unlike traditional agents that rely on a predefined, hardcoded set of tools, MONAD acts like a rational entity with basic "instincts". It has no memory and no pre-loaded knowledge of how to perform specific tasks (like checking the weather or searching the web).
+Unlike traditional agents that rely on a predefined, hardcoded set of tools, MONAD acts like a rational entity with basic "instincts". It starts each task with a clean slate — no chat history, no pre-loaded knowledge of how to perform specific tasks (like checking the weather or searching the web). Yet it grows smarter with every interaction, learning skills, accumulating experiences, and adapting to its user.
 
-Instead, it **autonomously learns** how to complete your tasks by writing and executing Python code on the fly, and then saving those successful experiences as reusable skills.
+It **autonomously learns** how to complete your tasks by writing and executing Python code on the fly, saving successful experiences as reusable skills, and building a persistent understanding of your preferences and goals.
 
 ---
 
 ## 🧠 Core Philosophy
 
-*   **File System as Database:** The system itself has no memory of past sessions. It persists all learned information (axioms, environment knowledge, learned skills, user context, and experiences) directly to local Markdown files. No vector databases, no RAG, zero external dependencies.
+*   **File System as Database:** All knowledge — axioms, skills, experiences, user preferences — lives as local Markdown files. Reading a file is remembering; writing a file is learning. No chat history accumulates, but knowledge grows with every task. No vector databases, no RAG, zero external dependencies.
 *   **Absolute Rationality:** MONAD follows a strict reasoning loop (`Analyze → Self-check → Learn → Execute → Reflect`) to accomplish goals logically.
 *   **Self-Learning & Self-Evolving:** Instead of shipping with 100 tools, MONAD ships with only 5 basic instincts (hands 🤲, voice 🗣️, eyes 👁️, dialogue 💬, screen 🖥️) plus a growing library of built-in skills. It learns everything else by generating code.
 *   **LLM as a Command Executor:** The LLM's own training data is disregarded. All factual information must be retrieved from the real world via code execution or web perception.
@@ -40,6 +40,7 @@ Instead, it **autonomously learns** how to complete your tasks by writing and ex
 *   **Tag-Based Experience Retrieval:** Experiences are tagged during reflection. At reasoning time, MONAD scores each experience by `relevance × 2 + recency` (not semantic embeddings, just keyword overlap + timestamp), picks the top entries, and always includes the 3 most recent as fallback. Simple, fast, zero infrastructure.
 *   **Anti-Hallucination Verification:** LLMs sometimes claim "I created the skill" without actually writing any files. MONAD defends against this at two levels: (1) **Post-Action Verification** — after actions that should create files, the system checks the filesystem and appends verification results to the LLM's observation; (2) **Hollow Answer Guard** — if the LLM tries to deliver a final answer claiming creation/saving but never executed a write action, the answer is rejected and the LLM is forced to actually do the work.
 *   **Skill Deduplication (Reuse First):** Before creating a new skill, the system prompts the LLM to check existing skills and prefer modifying them. The SkillBuilder module independently evaluates all existing skills and supports three actions: `skip`, `update` (preferred), or `create` — preventing the skill library from growing duplicate entries.
+*   **Personalization (User Learning):** After each task, MONAD extracts user facts, preferences, and goals — writing them to `user/` knowledge files. This is the same `file = knowledge` principle applied to user context: not chat memory, but explicit, editable, human-readable adaptation. Delete `user/facts.md` and MONAD "forgets" you; edit it and MONAD instantly adapts.
 
 ---
 
@@ -61,19 +62,19 @@ MONAD comes with five built-in capabilities:
 
 ## 📂 Knowledge Architecture
 
-MONAD uses **Categorized Memory** instead of semantic retrieval (RAG).
+MONAD uses **Categorized Knowledge** instead of semantic retrieval (RAG).
 
 ```text
 knowledge/
 ├── axioms/          # System axioms & core behavioral principles
 ├── environment/     # World knowledge (e.g., search engine URLs, API endpoints)
-├── user/            # Categorized user context (No RAG used here)
+├── user/            # User knowledge (auto-updated after each task)
 │   ├── facts.md     #   Objective facts & preferences (e.g., prefers Python)
 │   ├── mood.md      #   Current state & mood
 │   └── goals.md     #   Long-term goals & ongoing projects
 ├── skills/          # Reusable Python skills (built-in + auto-generated)
 │   └── <skill>/
-│       ├── skill.yaml   # Metadata: name, goal, inputs, steps, triggers
+│       ├── skill.yaml   # Metadata: name, goal, inputs, outputs, steps, triggers
 │       └── executor.py  # Python implementation with run(**kwargs)
 ├── experiences/     # Two-tier experience memory
 │   ├── pending.jsonl            # Short-term: all recent experiences (staging area)
@@ -99,7 +100,7 @@ Beyond the 5 core instincts, MONAD ships with a set of ready-to-use skills:
 | `markdown_to_knowledge_map` | Convert Markdown/text/URL into a visual knowledge graph (SVG/PNG) via Mermaid. |
 | `markdown_to_pdf` | Convert Markdown text or `.md` files to well-formatted PDF with CJK support. |
 
-> Skills are Python modules (`executor.py` + `skill.yaml`). MONAD can also auto-generate new skills from any successful task. Skills can declare **composite sequences** — chaining existing skills via YAML without writing code.
+> Skills are Python modules (`executor.py` + `skill.yaml`). Each skill declares its `inputs`, `outputs`, and `triggers`. MONAD auto-generates new skills from successful tasks. Skills can declare **composite pipelines** — chaining existing skills via YAML (`composition.steps` with parameter mapping) without writing code.
 
 ---
 
@@ -110,16 +111,16 @@ When you give MONAD an objective (e.g., *"What is the weather in Hangzhou today?
 1.  **Analyze & Self-Check:** Understand intent and check the local knowledge base for existing skills.
 2.  **Learn & Research (The "Search First" Principle):** If the task is unknown or an error occurs, MONAD uses `web_fetch` to research documentation, API usage, or solutions. This is the "Learning" phase where it acquires the "how-to" knowledge before acting.
 3.  **Execute & Observe:** MONAD writes and executes Python code or shell commands via `python_exec`. It treats the output as "Observations" to verify success or identify new obstacles.
-4.  **Reflect & Persist:** After a successful execution, the `Reflection` module summarizes the experience with tags. The `SkillBuilder` evaluates if the logic should be abstracted into a permanent skill — checking existing skills first to avoid duplication.
+4.  **Reflect & Persist:** After a successful execution, three learners kick in: the `Reflection` module summarizes the experience with tags; the `SkillBuilder` evaluates if the logic should become a permanent skill; and the `Personalizer` extracts any new user facts, preferences, or goals — writing them to `user/` files for all future tasks.
 5.  **Verify & Answer:** Before delivering the final answer, the system verifies that claimed actions actually happened (files exist, skills were written). The answer is based on real-world data verified through execution.
 
 ### 💡 Deep Dive: Why Stateless?
 
-MONAD intentionally discards traditional "Chat History" in favor of a **Stateless Design**, where every task starts with a clean context and persists only vital information via the file system.
+MONAD is **stateless but personalized** — every task starts with a clean context, yet MONAD adapts to its user over time.
 
 *   **Mitigating Hallucination:** Long-running chat histories eventually lead to context pollution and attention decay. By resetting the context per task, we force the LLM to reason in a pure, noise-free environment.
-*   **Physical Memory:** Unlike black-box model caches, MONAD's memory consists of human-readable Markdown files. This is a deliberate step towards **Personal Data Sovereignty**.
-*   **Task Atomicity:** Every objective becomes an independent, reproducible unit of execution.
+*   **Knowledge, not Memory:** MONAD has no chat memory — but it has knowledge files. Skills, experiences, and user preferences all live as human-readable Markdown files. This is **Personal Data Sovereignty**: your agent's brain is a folder you can read, edit, or delete.
+*   **Task Atomicity:** Every objective becomes an independent, reproducible unit of execution. Each task loads the current knowledge state, runs, and writes back what it learned.
 *   **The Future of Agents:** We believe the evolution of Agents will shift from "simulating conversation" to "simulating rational execution." Maintaining a living **"State Whiteboard"** via reflection loops is far more aligned with the essence of AGI than endlessly stacking chat logs.
 
 ### 🔗 TaskState: The State Monad
@@ -197,7 +198,7 @@ monad --test
 ```
 
 ### Unit Tests
-Run the full test suite (341 tests):
+Run the full test suite (402 tests):
 ```bash
 python -m pytest tests/ -v
 ```

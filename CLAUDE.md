@@ -92,10 +92,12 @@ monad/
 │   └── context.py      # TaskState — shared state dict for a single task
 ├── types.py            # Shared typing (ToolFn protocol)
 ├── knowledge/
-│   └── vault.py        # File system knowledge I/O
+│   ├── vault.py        # File system knowledge I/O
+│   └── schedule.py     # macOS Calendar/Reminders reader
 ├── learning/
-│   ├── reflection.py   # Post-task experience summarization
-│   └── skill_builder.py # Auto-generates reusable skills
+│   ├── reflection.py       # Post-task experience summarization
+│   ├── skill_builder.py    # Auto-generates reusable skills
+│   └── personalization.py  # Post-task user knowledge extraction
 ├── tools/              # 5 basic capabilities
 │   ├── python_exec.py
 │   ├── shell.py
@@ -117,7 +119,7 @@ knowledge/
 ├── user/               # User context (facts.md, mood.md, goals.md)
 ├── skills/             # Reusable skills (built-in + auto-generated)
 │   └── <skill_name>/
-│       ├── skill.yaml  # Metadata: name, goal, inputs, steps, triggers, dependencies, teardown, composition
+│       ├── skill.yaml  # Metadata: name, goal, inputs, outputs, steps, triggers, dependencies, teardown, composition
 │       └── executor.py # Python implementation with run(**kwargs)
 ├── experiences/        # Two-tier experience memory
 │   ├── pending.jsonl            # Short-term staging area
@@ -134,7 +136,7 @@ knowledge/
 
 The cognition layer is split into focused modules:
 - **`reasoner.py`** — ReAct loop orchestration, plan tracking, answer validation
-- **`prompts.py`** — System prompts (`build_reasoner_system`, `PLAN_SYSTEM`, `COMPLETION_CHECK_SYSTEM`) with runtime platform injection
+- **`prompts.py`** — System prompts (`build_reasoner_system`, `PLAN_SYSTEM`, `COMPLETION_CHECK_SYSTEM`, `PERSONALIZATION_SYSTEM`) with runtime platform injection
 - **`parser.py`** — JSON response parsing (`parse_response`, `clean_llm_output`, `parse_tags`), truncated JSON repair, `[TOOL_CALL]` format handling
 - **`hints.py`** — Post-action contextual hints for shell and desktop_control
 - **`planning.py`** — Plan decomposition parsing (`parse_plan_steps`, `extract_json_array`), semantic capability matching (`action_satisfies_planned_capability`), `BASIC_CAPABILITIES` constant
@@ -167,21 +169,27 @@ Key behaviors:
 
 - Executes 5 basic capabilities and learned skills
 - Loads skills exclusively from `~/.monad/knowledge/skills/` (via `CONFIG.skill_dir(name)`)
-- Supports **composite skills**: if `skill.yaml` declares `composition.sequence`, the executor runs sub-skills in order (max 16 depth)
+- Supports **composite skills** in two flavors:
+  - `composition.sequence` — simple list of sub-skill names, all receive the same kwargs
+  - `composition.steps` — ordered sub-skills with **parameter mapping**: `{{kwargs.X}}` references caller input, `{{skill_name}}` references a previous step's return value. Resolved by `_resolve_templates`.
 - Injects MONAD's tool functions (`web_fetch`, `shell`, `python_exec`, `ask_user`) into skill modules at load time
 - `python_exec` pre-injects `os`, `sys`, `web_fetch`, `shell`, `MONAD_OUTPUT_DIR`, `task_state` into execution namespace
 - Passes `task_state` through `execute()` → `_try_skill()` → `_load_and_run_skill()` for full propagation
 
 ### Learning Pipeline
 
+Three parallel learners run after every successful task:
+
 1. **Reflection** (`learning/reflection.py`): Summarizes task execution with tags into concise experience. Uses centralized `clean_llm_output` from `parser.py`.
 2. **SkillBuilder** (`learning/skill_builder.py`): Evaluates existing skills first; supports `skip`/`update`/`create`/composite actions. Receives rich execution traces (`actions_full` / `step_results_full`). Generated code goes through LLM review (`_review_code`) then isolated smoke test (`_smoke_run_skill_code`) before saving.
-3. **Vault** (`knowledge/vault.py`): Two-tier experience storage (pending → promote); tag-based retrieval with relevance+recency scoring. `save_skill` supports optional `composition` dict for composite skills.
+3. **Personalizer** (`learning/personalization.py`): Extracts user facts, preferences, and goals from the interaction and writes them to `user/` knowledge files. Same principle as Reflection and SkillBuilder — execute, extract, persist.
+4. **Vault** (`knowledge/vault.py`): Two-tier experience storage (pending → promote); tag-based retrieval with relevance+recency scoring. `save_skill` supports optional `composition` dict for composite skills. User context write API: `update_user_facts`, `update_user_goals`, `update_user_mood`.
 
 ### Stateless Message Management
 
 - Each task starts with clean context (no chat history accumulation)
-- Context built from: axioms + skills + environment + user context + protocols + experiences
+- Context built from: axioms + skills + environment + user context + schedule + protocols + experiences
+- User context grows via Personalizer, but each task independently loads the current state
 - Prevents hallucination buildup from long conversations
 - Forces LLM to reason in pure, noise-free environment
 
@@ -207,8 +215,11 @@ All knowledge files are markdown. Use `KnowledgeVault` methods:
 - `vault.load_axioms()` - Load system principles
 - `vault.load_skills()` - Load available skills
 - `vault.load_all_context()` - Load everything for reasoning
-- `vault.save_skill(name, goal, inputs, steps, code, dependencies={"python": [...], "system": [...]}, composition={"sequence": [...]})` - Save new skill (dependencies auto-installed on execution; composition for YAML-only composite skills)
+- `vault.save_skill(name, goal, inputs, steps, code, dependencies={"python": [...], "system": [...]}, composition={"sequence": [...]}, outputs={"key": "desc"})` - Save new skill (dependencies auto-installed on execution; composition for YAML-only composite skills; outputs declares return values)
 - `vault.save_experience(query, reflection, success, tags)` - Save task reflection (stages to pending.jsonl, auto-promotes)
+- `vault.update_user_facts(["new fact"])` - Append to user/facts.md (deduplicates)
+- `vault.update_user_goals(["goal"])` - Rewrite user/goals.md
+- `vault.update_user_mood("mood text")` - Overwrite user/mood.md with timestamp
 
 ### LLM Communication
 

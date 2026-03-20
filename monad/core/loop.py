@@ -11,6 +11,7 @@ from monad.execution.executor import Executor
 from monad.interface.output import Output
 from monad.interface.voice_input import VoiceInput
 from monad.knowledge.vault import KnowledgeVault
+from monad.learning.personalization import Personalizer
 from monad.learning.reflection import Reflection
 from monad.learning.skill_builder import SkillBuilder
 
@@ -38,6 +39,9 @@ class MonadLoop:
 
         self.skill_builder = SkillBuilder(vault=self.vault)
         Output.system("  ✓ 技能生成引擎就绪")
+
+        self.personalizer = Personalizer(vault=self.vault)
+        Output.system("  ✓ 个性化学习就绪")
 
     def start(self):
         """Start the MONAD interactive loop."""
@@ -132,6 +136,9 @@ class MonadLoop:
                 Output.learning(f"新技能已生成: {skill.get('name', '?')} — {skill.get('goal', '')}")
             else:
                 Output.learning("本次任务未生成新技能")
+
+            Output.learning("正在提取用户个性化信息...")
+            self.personalizer.extract_and_update(user_input, exec_result)
         else:
             Output.system("无执行动作，跳过反思阶段")
 
