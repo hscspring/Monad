@@ -182,7 +182,7 @@ APP_ID=xxx APP_SECRET=yyy monad --feishu
 monad --test
 ```
 
-### 运行单元测试（402 tests）
+### 运行单元测试（404 tests）
 ```bash
 python -m pytest tests/ -v
 ```

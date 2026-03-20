@@ -13,7 +13,8 @@ All notable changes to this project will be documented in this file.
 - **SkillBuilder composition validation**: `_validate_composition` checks that all sub-skills referenced in `sequence` or `steps` actually exist before saving.
 - **SkillBuilder Option D-2**: Enhanced composite skill generation prompt — LLM can now produce `composition.steps` with parameter mapping (in addition to the simpler `composition.sequence`).
 - **`PERSONALIZATION_SYSTEM` prompt** in `prompts.py`: Structured extraction of facts/goals/mood from task interactions.
-- **Tests**: 402 total (up from 341). New `test_personalization.py` (10 tests), `test_schedule.py` (8 tests); expanded `test_vault.py` (user context writers, skill outputs), `test_executor.py` (template resolution, composition steps), `test_skill_builder.py` (composition validation, system prompt checks).
+- **Composite skill `[composite]` tag**: `load_skills()` now labels composite skills with `[composite]` in the skill listing, helping the LLM distinguish orchestration skills from code-based atomic skills.
+- **Tests**: 404 total (up from 341). New `test_personalization.py` (10 tests), `test_schedule.py` (8 tests); expanded `test_vault.py` (user context writers, skill outputs, composite tag), `test_executor.py` (template resolution, composition steps), `test_skill_builder.py` (composition validation, system prompt checks).
 
 ### Changed
 - **Core loop**: Three learners now run in sequence after each successful task: Reflection → SkillBuilder → Personalizer.

@@ -198,7 +198,7 @@ monad --test
 ```
 
 ### Unit Tests
-Run the full test suite (402 tests):
+Run the full test suite (404 tests):
 ```bash
 python -m pytest tests/ -v
 ```
