@@ -3,308 +3,58 @@ MONAD Cognition: Reasoner
 Multi-turn ReAct reasoning engine.
 
 MONAD thinks like a rational person:
-  Analyze problem → Check own capabilities → Learn if needed → Execute → Reflect
-
-This is the brain of MONAD. Every step is printed so the user can see the process.
+  Analyze problem → Check capabilities → Learn if needed → Execute → Reflect
 """
 
 import json
-import os
-import platform
 import re
+
+from loguru import logger
+
+from monad.cognition.hints import action_hint, extract_open_app
+from monad.cognition.parser import parse_response
+from monad.cognition.planning import (
+    BASIC_CAPABILITIES,
+    action_satisfies_planned_capability,
+    parse_plan_steps,
+)
+from monad.cognition.prompts import (
+    ACTION_LOOP_MSG,
+    ASK_USER_EXHAUSTED_MSG,
+    COMPLETION_CHECK_SYSTEM,
+    PARSE_ERROR_MSG,
+    PLAN_SYSTEM_TEMPLATE,
+    THOUGHT_DEFAULT_MSG,
+    THOUGHT_HARD_LIMIT_MSG,
+    THOUGHT_LOOP_MSG,
+    THOUGHT_SOFT_LIMIT_MSG,
+    build_reasoner_system,
+)
+from monad.config import (
+    CONFIG, MAX_TURNS, HISTORY_CAP,
+    THOUGHT_SOFT_LIMIT, THOUGHT_HARD_LIMIT,
+    ASK_USER_LIMIT, MAX_ANSWER_REJECTIONS,
+    SIMILARITY_THRESHOLD, TRUNCATE_THOUGHT,
+    TRUNCATE_SHORT, TRUNCATE_MEDIUM, TRUNCATE_LONG, truncate,
+)
 from monad.core.llm import llm_call
-from monad.knowledge.vault import KnowledgeVault
+from monad.execution.context import TaskState
 from monad.interface.output import Output
+from monad.knowledge.vault import KnowledgeVault
 
-
-# After this many consecutive thoughts without action, escalate the prompt
-_THOUGHT_SOFT_LIMIT = 2
-_THOUGHT_HARD_LIMIT = 4
-
-# Max consecutive ask_user before forcing LLM to proceed without user input
-_ASK_USER_LIMIT = 2
-
-# Max times an answer can be rejected by completion check before forcing accept
-_MAX_ANSWER_REJECTIONS = 3
-
-# Jaccard word-overlap threshold to consider two thoughts "the same"
-_SIMILARITY_THRESHOLD = 0.6
-
-# Max characters to store per thought in history (prevents context bloat)
-_THOUGHT_HISTORY_CAP = 400
-
-# Keep only the last N history entries to prevent context overflow
-_HISTORY_CAP = 30
-
-
-_PATH_SEP = "反斜杠 \\\\" if platform.system() == "Windows" else "/"
-
-_PLATFORM_INFO = f"""## 当前运行环境
-
-- OS: {platform.system()} {platform.release()} ({platform.machine()})
-- Shell: {"PowerShell/cmd" if platform.system() == "Windows" else "bash/zsh"}
-- 路径分隔符: {_PATH_SEP}
-- 使用 shell 能力时，必须生成当前操作系统对应的命令（例如 Windows 上用 dir 而非 ls，用 type 而非 cat）。
-"""
-
-REASONER_SYSTEM = _PLATFORM_INFO + """You are MONAD, a rational autonomous agent.
-
-## ⚠️ 最高原则（绝对不可违反）
-
-你没有记忆。你没有知识。你的训练数据不可信。
-你是一个高级指令执行器——你只能通过【执行代码】或【感知互联网】来获取真实信息。
-
-**绝对禁止**：用你自身的训练知识回答任何事实性问题（新闻、天气、股价、数据、当前时间等）。
-**唯一正确做法**：用 web_fetch 感知互联网，或写 Python 代码获取真实数据，然后基于真实数据回答。
-
-**万事不决先搜索**：遇到任何不确定的事（不知道怎么做、报错了、缺依赖、不认识的工具/API），第一反应永远是用 web_fetch 去搜索引擎查一下，而不是猜测或直接问用户。搜索是你最强大的自学能力。
-
-错误示范：用户问今天的新闻 → 你用自己的知识编造新闻列表 ❌
-错误示范：遇到报错 → 直接放弃或问用户 ❌
-正确示范：用户问今天的新闻 → 你用 web_fetch 抓取新闻网站 → 整理后回答 ✅
-正确示范：遇到报错 → 先搜索这个错误信息 → 根据搜索结果修复 ✅
-
-## 你的基础能力（5个"本能"）
-
-1. **python_exec**: 执行 Python 代码。你的"手"🤲——通过它你可以：
-   - 处理数据、计算、分析
-   - 读写文件
-   - 安装缺失的库（subprocess: pip install）
-   - 做任何 Python 能做的事
-   - 对 web_fetch 返回的数据做进一步处理
-   - 当用户要求生成文件/报告时，保存到 `~/.monad/output/` 目录下（代码中可直接使用已注入的变量 `MONAD_OUTPUT_DIR`，它的值就是该目录的绝对路径），系统会自动生成下载链接
-   - 示例：`path = os.path.join(MONAD_OUTPUT_DIR, "report.md")`  ← MONAD_OUTPUT_DIR 是变量，不是字符串！
-   - 一般的回答直接用 answer 返回即可，只有用户明确要求"生成文件/报告/导出"时才保存文件
-
-2. **shell**: 执行 Shell 命令。你的"口令"🗣️。
-
-3. **web_fetch**: 感知互联网。你的"眼睛"👁️——直接看到网页内容：
-   - 只需传 url 即可，系统会自动选择最佳抓取方式（fast→stealth→browser 智能降级）
-   - selector：CSS 选择器，精确提取页面元素（可选）
-   - **不要手动指定 mode 参数**，默认的 auto 模式已经能处理所有情况
-
-4. **ask_user**: 确实无法独立完成时，向用户求助。你的"对话"💬。
-
-5. **desktop_control**: 操控桌面应用程序。你的"双手操控屏幕"🖥️：
-   - 通过截屏 + OCR 识别界面上的文字元素及坐标，再模拟键鼠操作
-   - **action 参数必须是一个完整字符串**，不要拆成多个参数。例如：`{"action": "click 搜索"}` ✅，不是 `{"action": "click", "text": "搜索"}` ❌
-   - 用法（action 参数）：
-     - `activate <应用名>`: **首先使用**——把目标应用切到前台（如 `activate Lark`）。不 activate 就 screenshot 只会看到当前前台窗口。
-     - `screenshot`: 截屏并 OCR，返回当前屏幕上所有可见文字元素及其坐标
-     - `click <文字>`: 点击屏幕上包含指定文字的元素
-     - `double_click <文字>`: 双击匹配的元素
-     - `click_xy <x> <y>`: 点击精确坐标（当 OCR 无法匹配时使用）
-     - `type <文字>`: 用键盘输入文字
-     - `hotkey <key1> <key2>`: 按快捷键（如 `hotkey cmd space`、`hotkey ctrl a`）
-     - `find <文字>`: 检查某个文字是否出现在屏幕上
-     - `wait <秒>`: 等待界面更新
-   - **标准使用流程**：
-     1. `shell: open -a "AppName"` 打开应用
-     2. `desktop_control: activate AppName` 确保应用在前台
-     3. `desktop_control: wait 2` 等待界面加载
-     4. `desktop_control: screenshot` 看到界面元素
-     5. `desktop_control: click <目标>` / `type <内容>` 操作
-     6. `desktop_control: screenshot` 确认结果
-   - ⚠️ **重要注意事项**：
-     - screenshot 是**全屏截图**，会同时看到前台和后台窗口的文字。必须根据 `[Frontmost app: XXX]` 标签确认你看到的是目标应用，而非其他窗口的内容。
-     - **只有 click/type/hotkey 才是真正的交互操作**。仅 screenshot 不代表你做了任何事。任务要求你"点击"或"发消息"时，你必须实际执行 click/type 动作。
-     - 每次操作后只做一次 screenshot 确认，不要重复截图。一次操作不成功就换方法，不要重试同样的操作。
-     - 不要把屏幕上看到的历史文字（如之前执行的日志）当作当前任务的结果。
-     - **详细用法和注意事项见 desktop_control 工具文档**（已加载到上下文中），包括消息发送流程、搜索快捷键、click 陷阱等。
-
-你还有已学会的技能（skills），可以**直接作为 capability 调用**（和 python_exec、web_fetch 一样），系统会自动注入工具函数和安装依赖。
-**调用已有技能时，永远不要用 python_exec 手动 import，直接用技能名作为 capability！**
-
-## 你的思考流程（每次任务必须遵循）
-
-1. **分析**: 用户想要什么？意图明确吗？
-   - 如果 query 本身有歧义、信息不足、需要明确 → **立刻 ask_user**（这是"分析"，不是"求助"）
-   - 例如：用户说"帮我分析博客" → 哪个博客？= 必须先问
-   - 例如：用户说"帮我分析 yam.gift" → 意图明确 = 直接执行
-2. **自检**: 我有已学会的技能可以做这件事吗？
-3. **判断**: 需要真实数据还是纯计算？需要互联网吗？
-4. **选择工具**: 需要网页 → web_fetch；数据处理 → python_exec；系统操作 → shell
-5. **执行**: 获取真实数据
-6. **观察**: 结果对吗？数据拿到了吗？
-7. **遇到障碍？先搜索！**: 报错/缺库/不熟悉 → web_fetch 搜索解决方案（不是问用户！）
-8. **重试**: 根据搜索结果或分析，换一种方法再试
-9. **回答**: 基于真实获取的数据，给用户组织一个清晰的回答
-
-## 文件附件
-
-当用户的消息中包含 `[attached: /path/to/file]` 时，表示用户上传了一个文件。
-- 该文件已保存在指定路径，你可以直接用 python_exec 读取它
-- 如果有已学的文档解析技能（如 parse_document），优先使用
-- 如果没有对应技能，用 python_exec 根据文件类型选择合适的方式读取（如 open() 读文本，或安装相关库解析 PDF/DOCX 等）
-
-## ⭐ URL优先原则（最重要）
-
-**当用户给出了具体的 URL 或域名（如"帮我分析 kexue.fm"），你必须先用 web_fetch 直接访问该 URL，而不是去搜索引擎搜索！**
-- 用户说"帮我分析 kexue.fm" → 第一步：web_fetch url="https://kexue.fm" ✅
-- 用户说"帮我分析 kexue.fm" → 第一步：搜索 bing "kexue.fm 是什么" ❌
-- 只有在直接访问失败后，才可以考虑搜索引擎作为补充
-
-## 常见任务的正确处理方式
-
-- **用户给了 URL/域名** → **先 web_fetch 直接访问该URL**，不要先搜索
-- **搜索信息/新闻** → web_fetch url="https://www.bing.com/search?q=关键词"
-- **查看任何网页** → web_fetch url="网页地址"（auto 模式自动选择最佳方式）
-- **复杂数据处理** → 先 web_fetch 获取原始数据，再 python_exec 处理
-- **记忆与分类用户状态** → python_exec 写入 `knowledge/user/` 目录
-- **文件/系统操作** → python_exec 或 shell
-- **用户附带了文件** → 用已学的文档解析技能或 python_exec 读取文件内容，再进行分析
-- **用户要求你学习/创建一个新技能** → 按下面的技能创建规范操作
-
-## 主动学习技能（Skill Creation）
-
-当用户要求你"学习一个新技能"时，你**必须按顺序执行以下 action**（每一步都是一个独立的 action，不能跳过）：
-
-**Step 0（最重要）** — 先检查已有技能，复用优先：
-仔细阅读上方 "Your Learned Skills" 列表中每个技能的 Goal 和 Triggers。
-- 如果某个已有技能**已经覆盖**当前需求 → 直接使用它，不要创建新的
-- 如果某个已有技能**功能相近**但不完全匹配（例如 web_to_markdown 已存在，用户要求"学习把微信文章转markdown"）→ **修改已有技能的 executor.py 使其兼容**，不要新建
-- 只有**完全没有相关技能**时，才继续 Step 1~4 创建新的
-
-修改已有技能示例：
-{"type": "action", "capability": "python_exec", "params": {"code": "# 读取已有技能代码\nwith open(os.path.expanduser('~/.monad/knowledge/skills/已有技能名/executor.py')) as f:\n    print(f.read())"}}
-然后修改代码使其兼容新场景，写回同一个文件。
-
-**Step 1** — shell 安装依赖：
-{"type": "action", "capability": "shell", "params": {"command": "pip install 库名"}}
-
-**Step 2** — python_exec 创建技能目录和文件：
-{"type": "action", "capability": "python_exec", "params": {"code": "import os\nos.makedirs(os.path.expanduser('~/.monad/knowledge/skills/技能名'), exist_ok=True)\n\n# 写 skill.yaml（如有第三方依赖，必须声明 dependencies 字段）\nyaml_content = '''name: 技能名\ngoal: 目标描述\ninputs:\n- param1\nsteps:\n- 步骤1\ntriggers:\n- 触发条件\ndependencies:\n  python:\n    - 第三方pip包名\n  system:\n    - 系统级工具名  # 安装命令\n'''\nwith open(os.path.expanduser('~/.monad/knowledge/skills/技能名/skill.yaml'), 'w') as f:\n    f.write(yaml_content)\n\n# 写 executor.py\ncode_content = '''def run(**kwargs):\n    param1 = kwargs.get(\"param1\", \"\")\n    # 实现逻辑\n    return \"结果\"\n'''\nwith open(os.path.expanduser('~/.monad/knowledge/skills/技能名/executor.py'), 'w') as f:\n    f.write(code_content)\n\nprint('技能文件已写入')"}}
-
-**Step 3** — 测试新创建的技能能跑通（⚠️ 仅用于创建新技能时的测试，日常调用技能请直接用 capability）：
-{"type": "action", "capability": "技能名", "params": {"param1": "测试值"}}
-
-**Step 4** — 全部通过后才能 answer 汇报结果
-
-技能目录结构（必须严格遵循）：
-```
-~/.monad/knowledge/skills/<skill_name>/
-├── skill.yaml      # 元数据（含 dependencies 声明）
-└── executor.py     # Python 实现（必须有 run(**kwargs) 函数）
-```
-
-关键规则：
-- executor.py 必须有 `def run(**kwargs)` 函数，返回字符串
-- triggers 字段帮助你在未来任务中判断何时应该调用这个技能
-- [CRITICAL] 如果 executor.py 中使用了第三方 Python 库，必须在 skill.yaml 的 dependencies.python 中声明（用 pip 包名），系统会在执行前自动安装
-- [CRITICAL] 你必须实际执行 python_exec 来写入文件！不要只在 thought 或 answer 里描述。**检查文件是否存在不等于创建文件**。你需要用 open() 和 write() 实际写入。
-- [CRITICAL] 如果 pip install 超时或失败，先搜索解决方案，不要放弃。可以尝试 pip install --timeout 300 或换源。
-- 安装大型库时，shell 命令默认有 120 秒超时，通常足够。如果仍然超时，尝试加 --timeout 参数。
-
-## 万事不决先搜索
-
-遇到障碍时（报错、缺库、不知道怎么做），用搜索引擎自学：
-
-- **代码报错** → 搜索错误信息：web_fetch url="https://www.bing.com/search?q=python+错误信息"
-- **缺少库（ImportError）** → 搜索正确包名：web_fetch url="https://www.bing.com/search?q=pip+install+模块名"
-- **不知道某个 API 怎么用** → 搜索官方文档：web_fetch url="https://www.bing.com/search?q=工具名+API+文档"
-- **不知道某个命令** → 搜索用法：web_fetch url="https://www.bing.com/search?q=how+to+命令"
-- **安装依赖失败** → 搜索解决方案：web_fetch url="https://www.bing.com/search?q=安装错误信息"
-- **不熟悉的任务** → 先搜索怎么做，再执行
-
-记住：搜索 → 阅读结果 → 执行解决方案 → 这是你最强大的自学循环！
-
-## 响应格式（非常重要）
-
-每次你只能返回一个 JSON 对象。不要写任何其他文字。不要用 markdown。不要加标签或前缀。
-你的整个回复必须是且仅是一个合法的 JSON 对象。
-
-合法回复类型（每次只选一种）：
-
-{"type": "thought", "content": "你的推理过程"}
-
-{"type": "action", "capability": "web_fetch", "params": {"url": "https://www.bing.com/search?q=今日新闻"}}
-
-{"type": "action", "capability": "web_fetch", "params": {"url": "https://example.com", "selector": ".content"}}
-
-{"type": "action", "capability": "python_exec", "params": {"code": "import json\\ndata = json.loads(raw)\\nprint(data)"}}
-
-{"type": "action", "capability": "shell", "params": {"command": "pip install scrapling"}}
-
-{"type": "action", "capability": "ask_user", "params": {"question": "你想查询哪个城市的天气？"}}
-
-{"type": "action", "capability": "<skill_name>", "params": {"param1": "值1", "param2": "值2"}}
-
-{"type": "answer", "content": "基于真实数据整理的最终回答"}
-
-**调用已有技能**：直接用技能名作为 capability，params 传入技能的 inputs 参数。示例：
-{"type": "action", "capability": "publish_to_xhs", "params": {"title": "标题", "content": "正文", "topics": ["AI"]}}
-{"type": "action", "capability": "start_recording", "params": {}}
-{"type": "action", "capability": "web_to_markdown", "params": {"url": "https://example.com"}}
-⚠️ **禁止用 python_exec + sys.path.insert + from executor import run 调用已有技能！** 那样会导致工具注入缺失和模块缓存冲突。
-
-## 规则
-
-1. 绝对不能用自身知识回答事实性问题。必须通过 web_fetch 或执行代码获取真实数据。
-2. 需要网页内容时，优先用 web_fetch，而不是在 python_exec 里写 requests。
-3. web_fetch 默认 auto 模式会自动处理 fast→stealth→browser 降级，一般不需要手动指定模式。
-4. 万事不决先搜索！遇到任何不确定的事（报错、缺库、不知道怎么做），第一反应是 web_fetch 搜索，而不是猜测、编造或问用户。
-5. 如果执行代码报 ImportError/ModuleNotFoundError：
-   a. 先 shell 安装：pip install <模块名>
-   b. 如果安装失败或包名不对 → 用 web_fetch 搜索正确包名
-   c. 常见映射：cv2→opencv-python, PIL→Pillow, sklearn→scikit-learn, bs4→beautifulsoup4, yaml→pyyaml
-   d. 系统级依赖（如 ffmpeg）→ shell: brew install <package>
-6. 实在无法通过搜索和执行解决，才用 ask_user 求助。ask_user 是最后手段。
-7. 失败了要多次尝试不同方法。
-8. 始终用中文回答。
-9. 先 thought 简短思考（1-3句话），然后立刻 action 行动。**禁止连续多轮 thought 而不执行 action。**
-10. Python 代码中必须包含 print() 语句。
-14. [CRITICAL] python_exec 的代码不能超过 80 行！如果需要生成长代码（如 PDF 报告、复杂数据处理），**必须先用 python_exec 把代码写到 .py 文件**（open+write），再用 shell 或 python_exec 执行该文件。直接在 code 字段放长代码会导致 JSON 输出被截断。
-11. [CRITICAL] 每次回复只能输出一个纯 JSON 对象，不能输出多个。绝对禁止输出任何 XML/HTML 标签（如 `<think>`, `<minimax:tool_call>`, `<invoke>`）。你的输出将被直接用 `json.loads` 解析，如果有任何多余字符将导致系统崩溃！
-12. [CRITICAL] thought 必须简短精炼（最多 3-5 句话），不要写长篇分析或反思。详细的分析放在最终 answer 里。
-13. [CRITICAL] 当任务要求"创建/生成/保存/安装"时，必须通过 action（python_exec/shell）实际执行。绝对不能只在 answer 里描述"我已完成"而没有实际执行任何写入操作。answer 是最终汇报，不是执行动作。"""
-
-MAX_TURNS = 30
-
-_PLAN_SYSTEM = """将用户请求分解为有序的执行步骤列表。
-
-可用技能（可直接作为 capability 调用，技能内部会自动完成所有操作）：
-{skills}
-
-基本能力：web_fetch（抓取网页）、python_exec（执行代码）、shell（系统命令）、ask_user（询问用户）、desktop_control（桌面操作）
-
-输出严格 JSON 数组，不要有其他文字：
-[{{"step": "步骤描述", "capability": "技能名或能力名"}}]
-
-规则：
-- 每个步骤对应一个具体的 action 调用
-- 优先匹配已有技能（如 publish_to_xhs、start_recording），技能是自包含的，调用即完成
-- 没有匹配技能时，用基本能力（web_fetch、python_exec 等）
-- **capability 字段只能填上方列出的技能名或基本能力名，不要编造不存在的名字**
-- 需要通过桌面 UI 操作的步骤（如发消息、操作应用界面），统一用 desktop_control
-- 按执行顺序排列
-- 不要包含"思考""分析""判断"等非 action 步骤"""
-
-_COMPLETION_CHECK_SYSTEM = """判断一个 AI agent 是否完成了用户交给的所有子任务。
-
-规则：
-- "告诉我X" / "分析X" / "帮我看看X" 表示 agent 应在回答中包含分析结果，不需要通过桌面应用发消息
-- 只检查任务步骤是否被实际执行（代码执行、文件写入、网页抓取、技能调用等），不检查回答质量
-- 如果用户请求包含多个步骤（如 "开始录屏 → 做某事 → 结束录制"），每个步骤都必须有对应的 action
-- 技能调用是自包含的（内部自动完成所有操作），只要被调用就算该步骤已完成。例如：publish_to_xhs 内部会自动打开浏览器、填写内容并发布，不需要额外的 desktop_control 操作
-- 常见技能：start_recording, stop_recording, publish_to_xhs, web_to_markdown, fetch_topic_news, markdown_to_knowledge_map 等
-- desktop_control 仅用于没有对应技能的桌面操作（如给某人发微信/飞书消息），此时必须有 type + hotkey return 动作
-
-请严格按以下格式回复，不要添加任何其他文字：
-COMPLETE
-或
-INCOMPLETE|<简短说明缺失了什么>"""
+_BASIC_CAPABILITIES = BASIC_CAPABILITIES
 
 
 class Reasoner:
     """Multi-turn ReAct reasoning engine.
 
     Implements the think → act → observe loop until the task is solved.
-    Every step is printed for the user to follow.
     """
 
     def __init__(self, vault: KnowledgeVault = None):
         self.vault = vault or KnowledgeVault()
         self._known_skills: list[str] = self._load_skill_names()
+        self._system_prompt = build_reasoner_system(str(CONFIG.skills_path))
 
     def solve(self, user_input: str, execute_fn=None) -> dict:
         """Solve a user's request through multi-turn reasoning.
@@ -319,7 +69,6 @@ class Reasoner:
         Output.phase("Phase 1: 加载知识上下文")
         context = self._build_context(user_input)
 
-        # Task decomposition: break multi-step requests into an explicit plan
         Output.phase("Phase 2: 任务分解")
         plan = self._decompose_task(user_input)
         if plan:
@@ -328,514 +77,362 @@ class Reasoner:
         else:
             Output.system("单步任务，跳过分解")
 
-        history = []
-        thoughts = []
-        actions = []
-        consecutive_thoughts = 0
-        consecutive_ask_user = 0
-        _recent_action_sigs = []  # tracks action signatures for loop detection
-        _click_target_counts = {}  # tracks click target repetitions across turns
-        _active_app = None  # tracks the last successfully activated app
-        answer_rejections = 0
+        state = _SolveState()
 
         for turn in range(MAX_TURNS):
             Output.phase(f"Reasoning Turn {turn + 1}/{MAX_TURNS}")
 
-            # Build prompt
-            prompt = self._build_prompt(context, history, plan or None)
+            prompt = self._build_prompt(context, state.history, plan)
 
-            # Call LLM
             Output.system("正在调用 LLM 进行推理...")
             try:
-                raw_response = llm_call(prompt, system=REASONER_SYSTEM, temperature=0.2)
+                raw_response = llm_call(prompt, system=self._system_prompt, temperature=0.2)
             except Exception as e:
+                logger.error(f"LLM call failed in solve(): {e}")
                 Output.error(f"LLM 调用失败: {str(e)}")
-                return {
-                    "answer": f"LLM 调用失败: {str(e)}",
-                    "thoughts": thoughts,
-                    "actions": actions,
-                    "success": False,
-                }
-
-            # Parse response
-            parsed = self._parse_response(raw_response)
-            Output.system(f"LLM 返回类型: {parsed['type']}")
-
-            # ── Handle: THOUGHT ──────────────────────────────
-            if parsed["type"] == "thought":
-                content = parsed["content"]
-                consecutive_thoughts += 1
-                thoughts.append(content)
-
-                # Store a capped version in history to prevent context bloat
-                capped = content[:_THOUGHT_HISTORY_CAP]
-                if len(content) > _THOUGHT_HISTORY_CAP:
-                    capped += "...(truncated)"
-                history.append({"role": "assistant", "content":
-                    json.dumps({"type": "thought", "content": capped}, ensure_ascii=False)
-                })
-
-                Output.thinking(content)
-
-                # --- Loop detection ---
-                is_loop = (
-                    len(thoughts) >= 2
-                    and self._thought_similarity(thoughts[-1], thoughts[-2]) > _SIMILARITY_THRESHOLD
-                )
-
-                if is_loop:
-                    Output.warn(f"检测到重复思考，强制要求执行动作")
-                    history.append({"role": "user", "content":
-                        "STOP. You are repeating the same thought. "
-                        "Do NOT think again. You MUST output an action JSON now. "
-                        "Pick one: web_fetch, python_exec, shell, or ask_user. "
-                        "If you have enough info, output an answer JSON."
-                    })
-                elif consecutive_thoughts >= _THOUGHT_HARD_LIMIT:
-                    Output.warn(f"连续思考 {consecutive_thoughts} 轮，强制要求动作")
-                    history.append({"role": "user", "content":
-                        "You have been thinking too long without acting. "
-                        "You MUST take an action NOW or give your final answer. "
-                        "Output a JSON with type='action' or type='answer'. "
-                        "Do NOT output another thought."
-                    })
-                elif consecutive_thoughts >= _THOUGHT_SOFT_LIMIT:
-                    history.append({"role": "user", "content":
-                        "You've thought enough. Now take action. "
-                        "What specific action (web_fetch/python_exec/shell) will you execute?"
-                    })
-                else:
-                    history.append({"role": "user", "content":
-                        "Good. Now take action based on your analysis. What will you do?"
-                    })
-
+                state.llm_failures += 1
+                if state.llm_failures >= 3:
+                    return state.fail(f"LLM 连续调用失败 {state.llm_failures} 次: {str(e)}")
+                Output.warn(f"LLM 调用失败 ({state.llm_failures}/3)，消耗本轮重试...")
                 continue
 
-            # Reset consecutive thought counter on any non-thought response
-            consecutive_thoughts = 0
+            parsed = parse_response(raw_response)
+            Output.system(f"LLM 返回类型: {parsed['type']}")
 
-            # ── Handle: ACTION ───────────────────────────────
+            if parsed["type"] == "thought":
+                self._handle_thought(parsed, state)
+                continue
+
+            state.consecutive_thoughts = 0
+
             if parsed["type"] == "action":
-                capability = parsed.get("capability", "")
-                params = parsed.get("params", {})
-
-                # Guard: prevent ask_user loop
-                if capability == "ask_user":
-                    consecutive_ask_user += 1
-                    if consecutive_ask_user > _ASK_USER_LIMIT:
-                        Output.warn(f"连续 ask_user {consecutive_ask_user} 次，强制跳过并继续执行")
-                        history.append({"role": "assistant", "content": raw_response})
-                        history.append({"role": "user", "content":
-                            "User did not respond. Do NOT ask again. "
-                            "Proceed with reasonable defaults or use the information you already have. "
-                            "If images are needed, skip them or generate a text-only version."
-                        })
-                        continue
-                else:
-                    consecutive_ask_user = 0
-
-                actions.append({"capability": capability, "params": params})
-
-                # --- Action loop detection ---
-                action_sig = f"{capability}:{json.dumps(params, sort_keys=True, ensure_ascii=False)}"
-                _recent_action_sigs.append(action_sig)
-                if len(_recent_action_sigs) >= 3 and len(set(_recent_action_sigs[-3:])) == 1:
-                    stuck_action = params.get("action", "") or params.get("command", "")
-                    is_app_launch_loop = (
-                        "open -a" in stuck_action or "activate" in stuck_action.lower()
-                        or capability == "shell" and "open -a" in params.get("command", "")
-                    )
-
-                    if is_app_launch_loop and execute_fn:
-                        Output.warn(f"检测到重复动作 ({capability})，自动执行 screenshot 推进流程")
-                        history.append({"role": "assistant", "content": raw_response})
-                        auto_result = execute_fn("desktop_control", action="screenshot")
-                        Output.action("desktop_control", "[自动] 截屏以推进流程")
-                        Output.observation(auto_result[:500] if len(auto_result) > 500 else auto_result)
-                        hint = self._action_hint("desktop_control", {"action": "screenshot"}, auto_result, user_input)
-                        if hint:
-                            auto_result += "\n" + hint
-                        history.append({"role": "user", "content":
-                            f"[SYSTEM] You were stuck repeating '{stuck_action}'. The app IS already open. "
-                            f"I auto-executed screenshot for you. Here are the current screen elements:\n\n"
-                            f"Observation from desktop_control:\n{auto_result}\n\n"
-                            f"Now use click <text> to click a UI element, or type <text> to enter text. "
-                            f"Do NOT run open/activate again."
-                        })
-                        _recent_action_sigs.clear()
-                    else:
-                        Output.warn(f"检测到重复动作 ({capability})，强制切换策略")
-                        history.append({"role": "assistant", "content": raw_response})
-                        history.append({"role": "user", "content":
-                            f"[SYSTEM] STOP. You executed '{capability}' with the same parameters "
-                            f"3 times in a row. This is not working. "
-                            f"You MUST try a COMPLETELY DIFFERENT approach now."
-                        })
+                should_continue = self._handle_action(
+                    parsed, raw_response, state, execute_fn, user_input, plan)
+                if should_continue:
                     continue
 
-                # --- Click-target loop detection (across non-consecutive turns) ---
-                if capability == "desktop_control":
-                    action_str = params.get("action", "")
-                    if action_str.startswith("click "):
-                        click_target = action_str[6:].strip()
-                        _click_target_counts[click_target] = _click_target_counts.get(click_target, 0) + 1
-                        if _click_target_counts[click_target] >= 3:
-                            Output.warn(f'检测到重复点击 "{click_target}" {_click_target_counts[click_target]} 次，强制换策略')
-                            history.append({"role": "assistant", "content": raw_response})
-                            history.append({"role": "user", "content":
-                                f'[SYSTEM] STOP. You have clicked "{click_target}" {_click_target_counts[click_target]} times '
-                                f'but the UI has not changed. This means you are clicking the WRONG element '
-                                f'(likely the search input text, not a search result). '
-                                f'Try one of these:\n'
-                                f'1. Click a more specific element with context (e.g. click the full search result text, not the short keyword)\n'
-                                f'2. Use click_xy with coordinates of the actual search result below the input\n'
-                                f'3. Press Enter/Return to confirm the search, then screenshot to see results\n'
-                                f'4. Use hotkey to navigate (e.g. hotkey down, then hotkey enter)'
-                            })
-                            continue
-
-                # --- Intercept redundant 'open -a' when app already active ---
-                import re as _re_loop
-                if capability == "shell" and _active_app and execute_fn:
-                    shell_cmd = params.get("command", "")
-                    m_open = _re_loop.search(r'open\s+-a\s+["\']?(\w+)', shell_cmd)
-                    if m_open:
-                        from monad.tools.desktop_control import _is_same_app
-                        requested_app = m_open.group(1)
-                        if _is_same_app(requested_app, _active_app):
-                            Output.warn(f'"{_active_app}" 已在前台，跳过重复 open，自动截屏')
-                            history.append({"role": "assistant", "content": raw_response})
-                            auto_result = execute_fn("desktop_control", action="screenshot")
-                            Output.action("desktop_control", "[自动] 截屏替代重复 open")
-                            Output.observation(auto_result[:500] if len(auto_result) > 500 else auto_result)
-                            hint = self._action_hint("desktop_control", {"action": "screenshot"}, auto_result, user_input)
-                            if hint:
-                                auto_result += "\n" + hint
-                            history.append({"role": "user", "content":
-                                f'[SYSTEM] "{_active_app}" is ALREADY open and in the foreground. '
-                                f'Do NOT run "open -a" or "activate" again. '
-                                f'I auto-executed screenshot for you:\n\n'
-                                f'Observation from desktop_control:\n{auto_result}\n\n'
-                                f'Now interact with the UI: use click <text>, type <text>, '
-                                f'hotkey <keys>, etc. See desktop_control docs for app-specific shortcuts.'
-                            })
-                            _recent_action_sigs.clear()
-                            continue
-
-                history.append({"role": "assistant", "content": raw_response})
-
-                # Show what action is being taken
-                if capability == "python_exec":
-                    code = params.get("code", "")
-                    Output.action("python_exec", "执行 Python 代码")
-                    Output.code(code)
-                elif capability == "shell":
-                    cmd = params.get("command", "")
-                    Output.action("shell", f"执行命令: {cmd}")
-                elif capability == "web_fetch":
-                    url = params.get("url", "")
-                    fetch_mode = params.get("mode", "auto")
-                    sel = params.get("selector", "")
-                    desc = f"感知网页: {url} (模式: {fetch_mode})"
-                    if sel:
-                        desc += f" [选择器: {sel}]"
-                    Output.action("web_fetch", desc)
-                elif capability == "ask_user":
-                    question = params.get("question", "")
-                    Output.action("ask_user", f"需要询问用户: {question}")
-                else:
-                    Output.action(capability, str(params)[:200])
-
-                # Execute
-                if execute_fn:
-                    result = execute_fn(capability, **params)
-                else:
-                    result = f"Error: No executor available for '{capability}'"
-
-                # Show observation
-                Output.observation(result[:500] if len(result) > 500 else result)
-
-                # Track active app from successful activate or open -a
-                if capability == "desktop_control":
-                    act_str = params.get("action", "")
-                    if act_str.startswith("activate") and ("verified" in result or "foreground" in result):
-                        app_name = act_str.split(None, 1)[1].strip() if " " in act_str else ""
-                        if app_name:
-                            _active_app = app_name
-                elif capability == "shell" and not _active_app:
-                    shell_cmd = params.get("command", "")
-                    import re as _re_track
-                    m_track = _re_track.search(r'open\s+-a\s+["\']?(\w+)', shell_cmd)
-                    if m_track and "error" not in result.lower() and "unable" not in result.lower():
-                        _active_app = m_track.group(1)
-
-                # Post-action verification for skill/file creation
-                verification = self._verify_action(capability, params, result)
-                if verification:
-                    result = result + "\n" + verification
-                    Output.observation(f"[验证] {verification}")
-
-                # Smart hint: guide LLM to next step after opening an app
-                hint = self._action_hint(capability, params, result, user_input)
-                if hint:
-                    result = result + "\n" + hint
-
-                # Update plan progress
-                if plan:
-                    self._update_plan(plan, capability)
-
-                # Feed back to LLM
-                observation = f"Observation from {capability}:\n{result}"
-                if plan:
-                    remaining = self._plan_incomplete_steps(plan)
-                    if remaining:
-                        observation += f"\n\n{self._format_plan(plan)}"
-                history.append({"role": "user", "content": observation})
-
-            # ── Handle: ANSWER ───────────────────────────────
             elif parsed["type"] == "answer":
-                # Completion check: plan-based (deterministic) or LLM fallback
-                if answer_rejections < _MAX_ANSWER_REJECTIONS:
-                    if plan:
-                        remaining = self._plan_incomplete_steps(plan)
-                        is_complete = not remaining
-                        incomplete_reason = "、".join(remaining) if remaining else ""
-                        # Plan says incomplete, but agent may have fulfilled
-                        # those steps via desktop_control (e.g. manual
-                        # messaging instead of calling a skill).  Fall back
-                        # to LLM-based check for a second opinion.
-                        if not is_complete and any(
-                            a.get("capability") == "desktop_control" for a in actions
-                        ):
-                            is_complete, incomplete_reason = self._check_task_completion(
-                                user_input, actions, parsed.get("content", "")
-                            )
-                    else:
-                        is_complete, incomplete_reason = self._check_task_completion(
-                            user_input, actions, parsed.get("content", "")
-                        )
-                    if not is_complete:
-                        answer_rejections += 1
-                        Output.warn(f"任务未完成 ({answer_rejections}/{_MAX_ANSWER_REJECTIONS}): {incomplete_reason}")
-                        history.append({"role": "assistant", "content": raw_response})
-                        hint = self._format_plan(plan) + "\n" if plan else ""
-                        history.append({"role": "user", "content":
-                            f"[SYSTEM] 任务尚未完成，缺失步骤：{incomplete_reason}\n"
-                            f"{hint}"
-                            f"不要回答，立刻执行下一个缺失的操作。"
-                        })
-                        continue
+                result = self._handle_answer(
+                    parsed, raw_response, state, user_input, plan)
+                if result is not None:
+                    return result
+                continue
 
-                Output.phase("任务完成")
-                return {
-                    "answer": parsed["content"],
-                    "thoughts": thoughts,
-                    "actions": actions,
-                    "success": True,
-                }
-
-            # ── Handle: PARSE ERROR ──────────────────────────
             elif parsed["type"] == "error":
-                Output.warn(f"LLM 返回格式异常，正在重试... (原始: {raw_response[:150]})")
-                # Store only a short snippet to avoid polluting history with garbage
-                history.append({"role": "assistant", "content": raw_response[:300]})
-                history.append({
-                    "role": "user",
-                    "content": (
-                        "Your response was not valid JSON. "
-                        "You MUST respond with ONLY a JSON object. "
-                        "No markdown, no extra text, no code fences, no XML tags. "
-                        "Example: {\"type\": \"action\", \"capability\": \"web_fetch\", "
-                        "\"params\": {\"url\": \"https://example.com\"}}"
-                    ),
-                })
+                self._handle_parse_error(raw_response, state)
 
-        # Exhausted turns
         Output.error(f"推理轮次已用尽 ({MAX_TURNS} 轮)")
-        return {
-            "answer": "推理轮次已用尽，无法完成任务。请尝试更简单的描述。",
-            "thoughts": thoughts,
-            "actions": actions,
-            "success": False,
-        }
+        return state.fail("推理轮次已用尽，无法完成任务。请尝试更简单的描述。")
 
-    def _build_context(self, user_input: str) -> str:
-        """Build context from MONAD's knowledge base."""
-        sections = []
+    # ── Phase Handlers ───────────────────────────────────────────
 
-        knowledge = self.vault.load_all_context(query=user_input)
+    def _handle_thought(self, parsed: dict, state: "_SolveState"):
+        """Handle a thought response from the LLM."""
+        content = parsed["content"]
+        state.consecutive_thoughts += 1
+        state.thoughts.append(content)
 
-        # Axioms
-        if knowledge.get("axioms"):
-            sections.append(f"## Your Principles\n{knowledge['axioms']}")
-            Output.system(f"已加载系统公理 ({len(knowledge['axioms'])} 字符)")
+        capped = truncate(content, TRUNCATE_THOUGHT)
+        state.history.append({"role": "assistant", "content":
+            json.dumps({"type": "thought", "content": capped}, ensure_ascii=False)
+        })
+        Output.thinking(content)
 
-        # Skills
-        if knowledge.get("skills"):
-            sections.append(f"## Your Learned Skills (USE THESE FIRST)\n{knowledge['skills']}")
-            Output.skill_check(f"已学会的技能: {knowledge['skills'][:200]}")
+        is_loop = (
+            len(state.thoughts) >= 2
+            and _thought_similarity(state.thoughts[-1], state.thoughts[-2]) > SIMILARITY_THRESHOLD
+        )
+
+        if is_loop:
+            Output.warn("检测到重复思考，强制要求执行动作")
+            state.inject_user_msg(THOUGHT_LOOP_MSG)
+        elif state.consecutive_thoughts >= THOUGHT_HARD_LIMIT:
+            Output.warn(f"连续思考 {state.consecutive_thoughts} 轮，强制要求动作")
+            state.inject_user_msg(THOUGHT_HARD_LIMIT_MSG)
+        elif state.consecutive_thoughts >= THOUGHT_SOFT_LIMIT:
+            state.inject_user_msg(THOUGHT_SOFT_LIMIT_MSG)
         else:
-            Output.skill_check("尚无已学技能，将在工作中学习")
+            state.inject_user_msg(THOUGHT_DEFAULT_MSG)
 
-        # Environment
-        if knowledge.get("environment"):
-            sections.append(f"## Environment Knowledge\n{knowledge['environment']}")
-            Output.system(f"已加载环境知识 ({len(knowledge['environment'])} 字符)")
+    def _handle_action(self, parsed: dict, raw_response: str,
+                       state: "_SolveState", execute_fn, user_input: str,
+                       plan: list | None) -> bool:
+        """Handle an action response. Returns True if loop should continue."""
+        capability = parsed.get("capability", "")
+        params = parsed.get("params", {})
 
-        # User Context (Facts, Mood, Goals)
-        if knowledge.get("user_context"):
-            sections.append(f"## Known User Context (Facts, Mood, Goals)\n{knowledge['user_context']}")
-            Output.system(f"已加载用户记忆 ({len(knowledge['user_context'])} 字符)")
+        if self._guard_action_limits(state, capability, params, raw_response,
+                                     execute_fn, user_input):
+            return True
 
-        # Protocols
-        if knowledge.get("protocols"):
-            sections.append(f"## Behavioral Protocols\n{knowledge['protocols']}")
+        state.history.append({"role": "assistant", "content": raw_response})
+        self._log_action(capability, params)
 
-        # Experiences
-        if knowledge.get("experiences"):
-            sections.append(f"## Past Experiences\n{knowledge['experiences']}")
-            Output.system(f"已加载过往经验总结 ({len(knowledge['experiences'])} 字符)")
+        result, state_key = self._execute_and_store(
+            state, capability, params, execute_fn, user_input)
 
-        sections.append(f"## User Request\n{user_input}")
+        observation = self._build_action_observation(
+            state, capability, result, state_key, user_input, plan)
+        state.history.append({"role": "user", "content": observation})
+        return True
 
-        return "\n\n".join(sections)
+    def _guard_action_limits(self, state: "_SolveState", capability: str,
+                             params: dict, raw_response: str,
+                             execute_fn, user_input: str) -> bool:
+        """Check ask_user limits and loop detectors. Returns True if handled."""
+        if capability == "ask_user":
+            state.consecutive_ask_user += 1
+            if state.consecutive_ask_user > ASK_USER_LIMIT:
+                Output.warn(f"连续 ask_user {state.consecutive_ask_user} 次，强制跳过")
+                state.history.append({"role": "assistant", "content": raw_response})
+                state.inject_user_msg(ASK_USER_EXHAUSTED_MSG)
+                return True
+        else:
+            state.consecutive_ask_user = 0
+
+        state.actions.append({"capability": capability, "params": params})
+
+        if self._detect_action_loop(state, capability, params, raw_response, execute_fn, user_input):
+            return True
+        if self._detect_click_loop(state, capability, params, raw_response):
+            return True
+        if self._intercept_redundant_open(state, capability, params, raw_response, execute_fn, user_input):
+            return True
+        return False
+
+    def _execute_and_store(self, state: "_SolveState", capability: str,
+                           params: dict, execute_fn, user_input: str) -> tuple[str, str]:
+        """Execute action, store in TaskState, track app. Returns (result, state_key)."""
+        if execute_fn:
+            result = execute_fn(capability, task_state=state.task_state, **params)
+        else:
+            result = f"Error: No executor available for '{capability}'"
+        Output.observation(truncate(result, TRUNCATE_LONG))
+
+        state_key = state.task_state.store(capability, result)
+        self._track_active_app(state, capability, params, result)
+        return result, state_key
+
+    def _build_action_observation(self, state: "_SolveState", capability: str,
+                                  result: str, state_key: str,
+                                  user_input: str, plan: list | None) -> str:
+        """Build the observation string fed back to the LLM."""
+        verification = self._verify_action(capability,
+                                           state.actions[-1].get("params", {}), result)
+        if verification:
+            result += "\n" + verification
+            Output.observation(f"[验证] {verification}")
+
+        hint = action_hint(capability, state.actions[-1].get("params", {}),
+                           result, user_input)
+        if hint:
+            result += "\n" + hint
+
+        if plan:
+            self._update_plan(plan, capability, state.actions[-1].get("params", {}))
+
+        observation = f"Observation from {capability} (stored as {state_key}):\n{result}"
+        state_summary = state.task_state.summary()
+        if state_summary:
+            observation += f"\n\n{state_summary}"
+        if plan:
+            remaining = _plan_incomplete_steps(plan)
+            if remaining:
+                observation += f"\n\n{_format_plan(plan)}"
+        return observation
+
+    def _handle_answer(self, parsed: dict, raw_response: str,
+                       state: "_SolveState", user_input: str,
+                       plan: list | None) -> dict | None:
+        """Handle an answer response. Returns result dict or None to continue."""
+        if state.answer_rejections < MAX_ANSWER_REJECTIONS:
+            if plan:
+                self._reconcile_plan_from_actions(plan, state.actions)
+                remaining = _plan_incomplete_steps(plan)
+                if not remaining:
+                    is_complete, incomplete_reason = True, ""
+                else:
+                    is_complete, incomplete_reason = self._check_task_completion(
+                        user_input,
+                        state.actions,
+                        parsed.get("content", ""),
+                        plan=plan,
+                    )
+                    if is_complete:
+                        for s in plan:
+                            s["done"] = True
+            else:
+                is_complete, incomplete_reason = self._check_task_completion(
+                    user_input, state.actions, parsed.get("content", "")
+                )
+
+            if not is_complete:
+                state.answer_rejections += 1
+                Output.warn(f"任务未完成 ({state.answer_rejections}/{MAX_ANSWER_REJECTIONS}): {incomplete_reason}")
+                state.history.append({"role": "assistant", "content": raw_response})
+                hint = _format_plan(plan) + "\n" if plan else ""
+                state.inject_user_msg(
+                    f"[SYSTEM] 任务尚未完成，缺失步骤：{incomplete_reason}\n"
+                    f"{hint}不要回答，立刻执行下一个缺失的操作。"
+                )
+                return None
+
+        Output.phase("任务完成")
+        return state.success(parsed["content"])
 
     @staticmethod
-    def _action_hint(capability: str, params: dict, result: str, user_input: str = "") -> str:
-        """Generate contextual hints to guide the LLM to the next logical step."""
-        import re as _re
-        if capability == "shell":
-            cmd = params.get("command", "")
-            m = _re.search(r'open\s+-a\s+["\']?(\w+)', cmd)
-            if m and "error" not in result.lower() and "unable" not in result.lower():
-                app_name = m.group(1)
-                return (
-                    f"[Hint: '{app_name}' has been opened. Your next steps should be: "
-                    f'1) desktop_control activate {app_name} — to bring it to foreground, '
-                    f'2) desktop_control wait 2 — let UI load, '
-                    f'3) desktop_control screenshot — to see the UI elements. '
-                    f'Do NOT run open -a again.]'
-                )
+    def _handle_parse_error(raw_response: str, state: "_SolveState"):
+        """Handle a parse error from the LLM response."""
+        Output.warn(f"LLM 返回格式异常，正在重试... (原始: {truncate(raw_response, 150)})")
+        state.history.append({"role": "assistant", "content": truncate(raw_response, 300)})
+        state.inject_user_msg(PARSE_ERROR_MSG)
+
+    # ── Loop Detection ───────────────────────────────────────────
+
+    @staticmethod
+    def _auto_screenshot(state: "_SolveState", execute_fn,
+                         user_input: str, context_msg: str):
+        """Execute an automatic screenshot and inject results into state."""
+        auto_result = execute_fn(
+            "desktop_control", task_state=state.task_state, action="screenshot")
+        state.task_state.store("desktop_control", auto_result)
+        Output.action("desktop_control", "[自动] 截屏")
+        Output.observation(truncate(auto_result, TRUNCATE_LONG))
+        hint = action_hint("desktop_control", {"action": "screenshot"}, auto_result, user_input)
+        if hint:
+            auto_result += "\n" + hint
+        state.inject_user_msg(
+            f"{context_msg}\n\n"
+            f"Observation from desktop_control:\n{auto_result}\n\n"
+            f"Now use click <text> to click a UI element, or type <text> to enter text. "
+            f"Do NOT run open/activate again."
+        )
+        state.recent_action_sigs.clear()
+
+    def _detect_action_loop(self, state: "_SolveState", capability: str,
+                            params: dict, raw_response: str, execute_fn,
+                            user_input: str) -> bool:
+        """Detect 3x repeated identical actions. Returns True if handled."""
+        action_sig = f"{capability}:{json.dumps(params, sort_keys=True, ensure_ascii=False)}"
+        state.recent_action_sigs.append(action_sig)
+
+        if len(state.recent_action_sigs) < 3 or len(set(state.recent_action_sigs[-3:])) != 1:
+            return False
+
+        stuck_action = params.get("action", "") or params.get("command", "")
+        is_app_launch_loop = (
+            "open -a" in stuck_action or "activate" in stuck_action.lower()
+            or capability == "shell" and "open -a" in params.get("command", "")
+        )
+
+        state.history.append({"role": "assistant", "content": raw_response})
+
+        if is_app_launch_loop and execute_fn:
+            Output.warn(f"检测到重复动作 ({capability})，自动执行 screenshot 推进流程")
+            self._auto_screenshot(
+                state, execute_fn, user_input,
+                f"[SYSTEM] You were stuck repeating '{stuck_action}'. The app IS already open. "
+                f"I auto-executed screenshot for you. Here are the current screen elements:")
+        else:
+            Output.warn(f"检测到重复动作 ({capability})，强制切换策略")
+            state.inject_user_msg(ACTION_LOOP_MSG.format(capability=capability))
+        return True
+
+    @staticmethod
+    def _detect_click_loop(state: "_SolveState", capability: str,
+                           params: dict, raw_response: str) -> bool:
+        """Detect repeated clicks on the same target. Returns True if handled."""
+        if capability != "desktop_control":
+            return False
+
+        action_str = params.get("action", "")
+        if not action_str.startswith("click "):
+            return False
+
+        click_target = action_str[6:].strip()
+        state.click_target_counts[click_target] = state.click_target_counts.get(click_target, 0) + 1
+
+        if state.click_target_counts[click_target] < 3:
+            return False
+
+        count = state.click_target_counts[click_target]
+        Output.warn(f'检测到重复点击 "{click_target}" {count} 次，强制换策略')
+        state.history.append({"role": "assistant", "content": raw_response})
+        state.inject_user_msg(
+            f'[SYSTEM] STOP. You have clicked "{click_target}" {count} times '
+            f'but the UI has not changed. This means you are clicking the WRONG element. '
+            f'Try one of these:\n'
+            f'1. Click a more specific element with context\n'
+            f'2. Use click_xy with coordinates of the actual search result below the input\n'
+            f'3. Press Enter/Return to confirm the search, then screenshot to see results\n'
+            f'4. Use hotkey to navigate (e.g. hotkey down, then hotkey enter)'
+        )
+        return True
+
+    def _intercept_redundant_open(self, state: "_SolveState", capability: str,
+                                  params: dict, raw_response: str,
+                                  execute_fn, user_input: str) -> bool:
+        """Intercept redundant 'open -a' when app is already active. Returns True if handled."""
+        if capability != "shell" or not state.active_app or not execute_fn:
+            return False
+
+        shell_cmd = params.get("command", "")
+        requested_app = extract_open_app(shell_cmd)
+        if not requested_app:
+            return False
+
+        from monad.tools.desktop_control import _is_same_app
+        if not _is_same_app(requested_app, state.active_app):
+            return False
+
+        Output.warn(f'"{state.active_app}" 已在前台，跳过重复 open，自动截屏')
+        state.history.append({"role": "assistant", "content": raw_response})
+        self._auto_screenshot(
+            state, execute_fn, user_input,
+            f'[SYSTEM] "{state.active_app}" is ALREADY open and in the foreground. '
+            f'Do NOT run "open -a" or "activate" again. '
+            f'I auto-executed screenshot for you:')
+        return True
+
+    # ── Action Tracking ──────────────────────────────────────────
+
+    @staticmethod
+    def _track_active_app(state: "_SolveState", capability: str,
+                          params: dict, result: str):
+        """Track the currently active app from successful activate/open commands."""
         if capability == "desktop_control":
-            action = params.get("action", "")
-            if action.startswith("activate") and "foreground" in result.lower():
-                if "Auto-screenshot" in result:
-                    return (
-                        "[Hint: App is in foreground and UI elements are shown above. "
-                        "Use click/type/hotkey to interact NOW. Do NOT run open/activate/screenshot again. "
-                        "Refer to the desktop_control tool docs for app-specific shortcuts.]"
-                    )
-                return (
-                    "[Hint: App is now in foreground. Next: desktop_control screenshot "
-                    "to see UI elements, then click/type to interact.]"
-                )
-            if action == "screenshot" and "UI elements" in result:
-                send_to_match = _re.search(r'["\']发送给\s*(\S+?)["\']', result)
-                if send_to_match:
-                    contact = send_to_match.group(1)
-                    return (
-                        f'[Hint: "发送给{contact}" button visible. '
-                        f'Click it to open chat, then type message and hotkey return.]'
-                    )
-                search_open = any(kw in result for kw in ("Search", "搜索", "search"))
-                if search_open:
-                    return (
-                        "[Hint: Search box is open. Type the CONTACT NAME to search, "
-                        "then wait 1 + screenshot to see results. "
-                        "Do NOT type the message content yet.]"
-                    )
-                return (
-                    "[Hint: Screen captured. Use click/type/hotkey to interact. "
-                    "Do NOT take another screenshot until you've performed an action. "
-                    "Refer to desktop_control tool docs for app-specific workflows.]"
-                )
-            if action.startswith("hotkey") and "Pressed hotkey" in result:
-                keys = action.replace("hotkey", "").strip().lower()
-                if keys in ("cmd f", "cmd k"):
-                    return (
-                        "[Hint: Search shortcut pressed. Now type the CONTACT NAME (not the message). "
-                        "Then wait 1 + screenshot to see results.]"
-                    )
-            if action.startswith("wait") and "Waited" in result:
-                return (
-                    "[Hint: Wait complete. NOW take a screenshot immediately: "
-                    "desktop_control screenshot — to see the current state of the UI. "
-                    "Do NOT skip the screenshot. Do NOT repeat previous actions.]"
-                )
-            if action.startswith("type") and "Typed:" in result:
-                # After typing into a search box, LLM must wait briefly then screenshot to see results
-                typed_text = action[4:].strip() if len(action) > 4 else ""
-                return (
-                    f'[Hint: Typed "{typed_text}". Wait for search results, then screenshot: '
-                    f'1) desktop_control wait 1  '
-                    f'2) desktop_control screenshot — find the contact in the RESULT LIST (larger y value). '
-                    f'IMPORTANT: Do NOT use "click {typed_text}" — that may hit the search INPUT box. '
-                    f'Instead use click_xy <x> <y> with the exact coordinates of the contact in the result list.]'
-                )
-            if action.startswith("click") and "Also matched:" in result:
-                return (
-                    "[Hint: Multiple elements matched your click target. If the clicked element "
-                    "was a search input (not a result), the UI won't change. Check the 'Also matched' "
-                    "alternatives and try clicking one with more context text (e.g. a search result item).]"
-                )
-            if action.startswith("click") and "发送给" in result:
-                send_to_match = _re.search(r'["\']发送给\s*(\S+?)["\']', result)
-                if send_to_match:
-                    contact = send_to_match.group(1)
-                    if "发送给" in action:
-                        # LLM already clicked the "发送给" button → chat is now open
-                        import re as _re2
-                        msg_match = _re2.search(r'[""「\'"]([^"""\'」]{1,50})[""」\'"]', user_input)
-                        msg = msg_match.group(1) if msg_match else "<消息内容>"
-                        return (
-                            f'[Hint: "发送给{contact}" clicked — chat is now open. '
-                            f'The input box is already focused. Do these steps IN ORDER:\n'
-                            f'1. desktop_control wait 1\n'
-                            f'2. desktop_control type {msg}\n'
-                            f'3. desktop_control hotkey return\n'
-                            f'Do NOT click the input area, do NOT screenshot first, just type directly.]'
-                        )
-                    else:
-                        # Some other click caused "发送给" to appear → tell LLM to click it
-                        return (
-                            f'[Hint: Click succeeded and "发送给{contact}" button appeared. '
-                            f'Click it to open the chat: click 发送给{contact} '
-                            f'— then type your message and hotkey return to send.]'
-                        )
-            if action.startswith("click") and "WARNING: Only one" in result and "SEARCH INPUT" in result:
-                # Clicked what is likely the search input text, not the result below.
-                # Instruct LLM to wait and screenshot to find the result list.
-                return (
-                    "[Hint: The click may have landed on the SEARCH INPUT field (where you typed), "
-                    "not the contact in the RESULT LIST below. "
-                    "Do: desktop_control wait 1 → desktop_control screenshot. "
-                    "In the screenshot, look for the contact name at a LOWER position (larger y). "
-                    "If you see it, use click_xy <x> <y> with those exact coordinates to click it.]"
-                )
-            if action.startswith("click") and "Clicked" in result:
-                # After clicking a contact/search result, give precise next steps.
-                # Extract the message to send from user_input if available.
-                import re as _re2
-                msg_match = _re2.search(r'[""「\'"]([^"""\'」]{1,50})[""」\'"]', user_input)
-                if msg_match:
-                    msg = msg_match.group(1)
-                    return (
-                        f"[Hint: Click executed. The chat window should now be open. "
-                        f"Your EXACT next steps — do them IN ORDER, no skipping:\n"
-                        f"1. desktop_control wait 1\n"
-                        f"2. desktop_control screenshot — confirm the chat is open\n"
-                        f"3. desktop_control type {msg}\n"
-                        f"4. desktop_control hotkey return — SEND the message\n"
-                        f"5. desktop_control screenshot — confirm message was sent\n"
-                        f"Do NOT activate, do NOT open, do NOT search again.]"
-                    )
-                return (
-                    "[Hint: Click executed. Now wait for the UI to respond: "
-                    "desktop_control wait 1 — then desktop_control screenshot "
-                    "to confirm whether the chat/page opened. "
-                    "Do NOT click/activate/open again without first seeing the updated screen.]"
-                )
-        return ""
+            act_str = params.get("action", "")
+            if act_str.startswith("activate") and ("verified" in result or "foreground" in result):
+                app_name = act_str.split(None, 1)[1].strip() if " " in act_str else ""
+                if app_name:
+                    state.active_app = app_name
+        elif capability == "shell" and not state.active_app:
+            shell_cmd = params.get("command", "")
+            app = extract_open_app(shell_cmd)
+            if app and "error" not in result.lower() and "unable" not in result.lower():
+                state.active_app = app
+
+    @staticmethod
+    def _log_action(capability: str, params: dict):
+        """Log the action being taken to Output."""
+        if capability == "python_exec":
+            Output.action("python_exec", "执行 Python 代码")
+            Output.code(params.get("code", ""))
+        elif capability == "shell":
+            Output.action("shell", f"执行命令: {params.get('command', '')}")
+        elif capability == "web_fetch":
+            url = params.get("url", "")
+            sel = params.get("selector", "")
+            desc = f"感知网页: {url} (模式: {params.get('mode', 'auto')})"
+            if sel:
+                desc += f" [选择器: {sel}]"
+            Output.action("web_fetch", desc)
+        elif capability == "ask_user":
+            Output.action("ask_user", f"需要询问用户: {params.get('question', '')}")
+        else:
+            Output.action(capability, truncate(str(params), TRUNCATE_MEDIUM))
+
+    # ── Verification ─────────────────────────────────────────────
 
     @staticmethod
     def _verify_action(capability: str, params: dict, result: str) -> str:
@@ -844,41 +441,43 @@ class Reasoner:
             return ""
 
         code = params.get("code", "") + params.get("command", "")
-
-        skills_dir = os.path.expanduser("~/.monad/knowledge/skills/")
-        if skills_dir not in code and "/skills/" not in code:
+        skills_path = str(CONFIG.skills_path)
+        if skills_path not in code and "/skills/" not in code:
             return ""
 
         match = re.search(r'skills/([a-zA-Z0-9_-]+)', code)
         if not match:
             return ""
+
         skill_name = match.group(1)
-        skill_path = os.path.join(skills_dir, skill_name)
-        yaml_ok = os.path.isfile(os.path.join(skill_path, "skill.yaml"))
-        py_ok = os.path.isfile(os.path.join(skill_path, "executor.py"))
+        skill_dir = CONFIG.skill_dir(skill_name)
+        yaml_ok = (skill_dir / "skill.yaml").is_file()
+        py_ok = (skill_dir / "executor.py").is_file()
+
         parts = []
         if yaml_ok and py_ok:
             parts.append(f"✅ Verified: skill '{skill_name}' — skill.yaml and executor.py exist")
         else:
             if not yaml_ok:
-                parts.append(f"⚠️ skill.yaml NOT found at {skill_path}/skill.yaml")
+                parts.append(f"⚠️ skill.yaml NOT found at {skill_dir}/skill.yaml")
             if not py_ok:
-                parts.append(f"⚠️ executor.py NOT found at {skill_path}/executor.py")
+                parts.append(f"⚠️ executor.py NOT found at {skill_dir}/executor.py")
         return " | ".join(parts)
 
-    def _check_task_completion(self, user_input: str, actions: list,
-                               proposed_answer: str) -> tuple:
-        """Use LLM to semantically check if all subtasks are done.
-
-        Returns (is_complete: bool, reason: str).
-        Defaults to complete on LLM failure (fail-open to prevent loops).
-        """
+    def _check_task_completion(
+        self,
+        user_input: str,
+        actions: list,
+        proposed_answer: str,
+        plan: list[dict] | None = None,
+    ) -> tuple:
+        """Use LLM to check if all subtasks are done. Fail-open on errors."""
         action_lines = []
         for i, a in enumerate(actions, 1):
             cap = a.get("capability", "")
             p = a.get("params", {})
             if cap == "python_exec":
-                desc = p.get("code", "")[:150].replace("\n", " ")
+                desc = truncate(p.get("code", "").replace("\n", " "), 150)
             elif cap == "shell":
                 desc = p.get("command", "")
             elif cap == "web_fetch":
@@ -886,18 +485,24 @@ class Reasoner:
             elif cap == "desktop_control":
                 desc = p.get("action", "")
             else:
-                desc = str(p)[:100]
+                desc = truncate(str(p), TRUNCATE_SHORT)
             action_lines.append(f"{i}. [{cap}] {desc}")
 
-        prompt = (
-            f"用户请求：{user_input}\n\n"
-            f"已执行的动作：\n" + "\n".join(action_lines) + "\n\n"
-            f"Agent 准备回答（摘要）：{proposed_answer[:500]}\n\n"
-            f"任务是否全部完成？"
-        )
+        parts = [
+            f"用户请求：{user_input}\n",
+            f"\n已执行的动作：\n" + "\n".join(action_lines),
+            f"\n\nAgent 准备回答（摘要）：{truncate(proposed_answer, TRUNCATE_LONG)}",
+        ]
+        if plan:
+            parts.append(
+                f"\n\n{_format_plan(plan)}\n"
+                f"（等效完成：若某步计划为 web_fetch，但实际用 python_exec+HTTP 抓取，也算完成该步。）"
+            )
+        parts.append("\n\n任务是否全部完成？")
+        prompt = "".join(parts)
 
         try:
-            raw = llm_call(prompt, system=_COMPLETION_CHECK_SYSTEM,
+            raw = llm_call(prompt, system=COMPLETION_CHECK_SYSTEM,
                            temperature=0, max_tokens=100)
             raw = raw.strip()
             if raw.startswith("COMPLETE"):
@@ -909,103 +514,51 @@ class Reasoner:
         except Exception:
             return (True, "")
 
-    def _load_skill_names(self) -> list[str]:
-        """Extract skill names from vault for plan validation."""
-        names = []
-        for line in self.vault.load_skills().split("\n"):
-            if line.startswith("Skill: "):
-                names.append(line[7:].strip())
-        return names
+    # ── Context & Prompt Building ────────────────────────────────
 
-    def _decompose_task(self, user_input: str) -> list[dict]:
-        """Decompose user request into an ordered step plan via LLM.
+    def _build_context(self, user_input: str) -> str:
+        """Build context from MONAD's knowledge base."""
+        sections = []
+        knowledge = self.vault.load_all_context(query=user_input)
 
-        Returns list of {"step": str, "capability": str, "done": bool}.
-        Returns empty list on failure (graceful degradation).
-        """
-        skills_summary = ", ".join(self._known_skills) if self._known_skills else "(无)"
+        if knowledge.get("axioms"):
+            sections.append(f"## Your Principles\n{knowledge['axioms']}")
+            Output.system(f"已加载系统公理 ({len(knowledge['axioms'])} 字符)")
 
-        system = _PLAN_SYSTEM.format(skills=skills_summary)
-        try:
-            raw = llm_call(
-                f"用户请求：{user_input}",
-                system=system, temperature=0, max_tokens=400,
-            )
-            raw = raw.strip()
-            if "```" in raw:
-                raw = re.sub(r"```\w*\n?", "", raw).strip()
-            start = raw.find("[")
-            end = raw.rfind("]")
-            if start >= 0 and end > start:
-                raw = raw[start:end + 1]
-            steps = json.loads(raw)
-            if not isinstance(steps, list) or not steps:
-                return []
-            return [
-                {"step": s.get("step", ""), "capability": s.get("capability", ""), "done": False}
-                for s in steps if isinstance(s, dict) and s.get("step")
-            ]
-        except Exception as exc:
-            Output.warn(f"任务分解失败 ({exc.__class__.__name__}: {exc})，将作为单步任务执行")
-            return []
+        if knowledge.get("skills"):
+            sections.append(f"## Your Learned Skills (USE THESE FIRST)\n{knowledge['skills']}")
+            Output.skill_check(f"已学会的技能: {truncate(knowledge['skills'], TRUNCATE_MEDIUM)}")
+        else:
+            Output.skill_check("尚无已学技能，将在工作中学习")
 
-    _BASIC_CAPABILITIES = {"python_exec", "shell", "web_fetch", "ask_user", "desktop_control"}
+        if knowledge.get("environment"):
+            sections.append(f"## Environment Knowledge\n{knowledge['environment']}")
+            Output.system(f"已加载环境知识 ({len(knowledge['environment'])} 字符)")
 
-    def _update_plan(self, plan: list[dict], capability: str) -> None:
-        """Mark the first matching undone step as done."""
-        for step in plan:
-            if not step["done"] and step["capability"] == capability:
-                step["done"] = True
-                return
-        # Fallback: if the plan used a hallucinated capability name (e.g.
-        # "send_wechat_message") and we're using desktop_control or another
-        # real capability, match the first undone step whose tag is unknown.
-        known = self._BASIC_CAPABILITIES | set(self._known_skills)
-        for step in plan:
-            if not step["done"] and step["capability"] not in known:
-                step["done"] = True
-                return
+        if knowledge.get("user_context"):
+            sections.append(f"## Known User Context\n{knowledge['user_context']}")
+            Output.system(f"已加载用户记忆 ({len(knowledge['user_context'])} 字符)")
+
+        if knowledge.get("protocols"):
+            sections.append(f"## Behavioral Protocols\n{knowledge['protocols']}")
+
+        if knowledge.get("experiences"):
+            sections.append(f"## Past Experiences\n{knowledge['experiences']}")
+            Output.system(f"已加载过往经验总结 ({len(knowledge['experiences'])} 字符)")
+
+        sections.append(f"## User Request\n{user_input}")
+        return "\n\n".join(sections)
 
     @staticmethod
-    def _format_plan(plan: list[dict]) -> str:
-        """Format plan as a checklist for LLM context injection."""
-        lines = ["[PLAN]"]
-        next_found = False
-        for i, s in enumerate(plan):
-            if s["done"]:
-                lines.append(f"  ✅ {i + 1}. {s['step']}")
-            else:
-                marker = " ← NEXT" if not next_found else ""
-                lines.append(f"  ⬜ {i + 1}. {s['step']} [{s['capability']}]{marker}")
-                if not next_found:
-                    next_found = True
-        return "\n".join(lines)
-
-    @staticmethod
-    def _plan_incomplete_steps(plan: list[dict]) -> list[str]:
-        """Return descriptions of undone steps."""
-        return [s["step"] for s in plan if not s["done"]]
-
-    @staticmethod
-    def _thought_similarity(a: str, b: str) -> float:
-        """Jaccard similarity between two thought strings (word-level)."""
-        words_a = set(a.split())
-        words_b = set(b.split())
-        if not words_a or not words_b:
-            return 0.0
-        return len(words_a & words_b) / len(words_a | words_b)
-
-    def _build_prompt(self, context: str, history: list, plan: list[dict] | None = None) -> str:
-        """Build the full prompt for the LLM.
-
-        Trims old history to stay within a reasonable context budget.
-        """
+    def _build_prompt(context: str, history: list,
+                      plan: list[dict] | None = None) -> str:
+        """Build the full prompt for the LLM."""
         parts = [context]
 
         if plan:
-            parts.append("\n" + self._format_plan(plan))
+            parts.append("\n" + _format_plan(plan))
 
-        trimmed = history[-_HISTORY_CAP:] if len(history) > _HISTORY_CAP else history
+        trimmed = history[-HISTORY_CAP:] if len(history) > HISTORY_CAP else history
 
         if trimmed:
             if len(trimmed) < len(history):
@@ -1018,132 +571,155 @@ class Reasoner:
 
         return "\n".join(parts)
 
-    def _normalize_parsed(self, parsed: dict) -> dict | None:
-        """Normalize alternative JSON formats into the standard format."""
-        if "type" in parsed:
-            ptype = parsed["type"]
-            # LLM sometimes returns {"type": "ask_user", "content": "..."}
-            # instead of the correct action format — fix it here
-            if ptype == "ask_user":
-                question = parsed.get("content", "") or parsed.get("question", "")
-                return {
-                    "type": "action",
-                    "capability": "ask_user",
-                    "params": {"question": question},
-                }
-            return parsed
-        # Handle {"action": "ask_user", "params": {...}} format
-        if "action" in parsed:
-            return {
-                "type": "action",
-                "capability": parsed["action"],
-                "params": parsed.get("params", {}),
-            }
-        # Handle {"capability": "shell", "params": {...}} format
-        if "capability" in parsed:
-            return {
-                "type": "action",
-                "capability": parsed["capability"],
-                "params": parsed.get("params", {}),
-            }
-        # Handle {"answer": "..."} format
-        if "answer" in parsed:
-            return {"type": "answer", "content": parsed["answer"]}
-        # Handle {"thought": "..."} format
-        if "thought" in parsed:
-            return {"type": "thought", "content": parsed["thought"]}
-        return None
+    # ── Task Planning ────────────────────────────────────────────
 
-    def _parse_response(self, raw: str) -> dict:
-        """Parse LLM response into structured format.
+    def _decompose_task(self, user_input: str) -> list[dict]:
+        """Decompose user request into an ordered step plan via LLM."""
+        skills_summary = ", ".join(self._known_skills) if self._known_skills else "(无)"
+        system = PLAN_SYSTEM_TEMPLATE.format(skills=skills_summary)
 
-        Handles various edge cases:
-        - Pure JSON
-        - JSON wrapped in markdown code blocks
-        - JSON mixed with text labels (e.g. '思考: {...}')
-        - Multiple JSON objects (takes the first valid one)
-        - Truncated JSON (attempts to fix)
-        - <think>...</think> XML blocks (stripped)
-        - Alternative format: {"action": ..., "params": ...}
-        """
-        cleaned = raw.strip()
-
-        # Strip <think>...</think> blocks (Minimax model leakage)
-        cleaned = re.sub(r'<think>.*?</think>', '', cleaned, flags=re.DOTALL).strip()
-        # Also strip unclosed <think> blocks (truncated responses)
-        cleaned = re.sub(r'<think>.*$', '', cleaned, flags=re.DOTALL).strip()
-        # Strip any remaining XML-like tags from Minimax
-        cleaned = re.sub(r'</?(?:minimax:tool_call|invoke|parameter)[^>]*>', '', cleaned).strip()
-
-        # Remove markdown code blocks
-        if "```" in cleaned:
-            lines = cleaned.split("\n")
-            lines = [l for l in lines if not l.strip().startswith("```")]
-            cleaned = "\n".join(lines).strip()
-
-        # Strategy 1: Direct parse
         try:
-            parsed = json.loads(cleaned)
-            normalized = self._normalize_parsed(parsed)
-            if normalized:
-                return normalized
-        except json.JSONDecodeError:
-            pass
+            raw = llm_call(
+                f"用户请求：{user_input}", system=system, temperature=0, max_tokens=400
+            )
+            steps = parse_plan_steps(raw)
+            if not steps:
+                return []
+            return steps
+        except Exception as exc:
+            Output.warn(
+                f"任务分解失败 ({exc.__class__.__name__}: {exc})，将作为单步任务执行"
+            )
+            return []
 
-        # Strategy 2: Find JSON object in mixed text
-        # This handles cases like '思考: {"type": "thought", ...}'
-        brace_depth = 0
-        json_start = -1
-        for i, ch in enumerate(cleaned):
-            if ch == '{':
-                if brace_depth == 0:
-                    json_start = i
-                brace_depth += 1
-            elif ch == '}':
-                brace_depth -= 1
-                if brace_depth == 0 and json_start >= 0:
-                    candidate = cleaned[json_start:i + 1]
-                    try:
-                        parsed = json.loads(candidate)
-                        normalized = self._normalize_parsed(parsed)
-                        if normalized:
-                            return normalized
-                    except json.JSONDecodeError:
-                        pass
-                    json_start = -1
+    def _reconcile_plan_from_actions(self, plan: list[dict], actions: list[dict]) -> None:
+        """Replay the action log with semantic matching so plan progress stays consistent."""
+        for s in plan:
+            s["done"] = False
+        for act in actions:
+            cap = act.get("capability", "")
+            params = act.get("params", {}) or {}
+            self._update_plan(plan, cap, params)
 
-        # Strategy 3: Find partial/truncated JSON and try to fix
-        start = cleaned.find("{")
-        if start >= 0:
-            fragment = cleaned[start:]
-            # Try to detect the type from the fragment
-            if '"type"' in fragment:
-                # Try adding missing closing braces
-                for fix in ['}", "}"}', '"}', '}', '"]}', '"}}']:
-                    try:
-                        parsed = json.loads(fragment + fix)
-                        if "type" in parsed:
-                            Output.warn(f"JSON 被截断，已自动修复")
-                            return parsed
-                    except json.JSONDecodeError:
-                        continue
+    def _update_plan(self, plan: list[dict], capability: str, params: dict) -> None:
+        """Mark the first undone step that this action satisfies as done."""
+        known_skills = frozenset(self._known_skills)
+        for step in plan:
+            if step["done"]:
+                continue
+            if action_satisfies_planned_capability(
+                step["capability"], capability, params, known_skills
+            ):
+                step["done"] = True
+                return
+        known = _BASIC_CAPABILITIES | set(self._known_skills)
+        for step in plan:
+            if not step["done"] and step["capability"] not in known:
+                step["done"] = True
+                return
 
-        # Strategy 4: Handle [TOOL_CALL] format (Minimax model leakage)
-        # e.g. [TOOL_CALL] {tool => "ask_user", args => { --question "..." }}
-        tool_call_match = re.search(r'\[TOOL_CALL\].*?tool\s*=>\s*"(\w+)"', cleaned)
-        if tool_call_match:
-            tool_name = tool_call_match.group(1)
-            # Extract question/content from args if present
-            arg_match = re.search(r'--question\s+"([^"]*)', cleaned)
-            arg_val = arg_match.group(1) if arg_match else ""
-            if tool_name == "ask_user":
-                return {"type": "action", "capability": "ask_user",
-                        "params": {"question": arg_val}}
-            return {"type": "action", "capability": tool_name, "params": {}}
 
-        # Strategy 5: Extract thought from plain text response
-        # If the model outputs plain text, treat it as a thought
-        if len(cleaned) > 10 and '{' not in cleaned:
-            return {"type": "thought", "content": cleaned[:500]}
+    def _load_skill_names(self) -> list[str]:
+        """Extract skill names from vault."""
+        names = []
+        for line in self.vault.load_skills().split("\n"):
+            if line.startswith("Skill: "):
+                names.append(line[7:].strip())
+        return names
 
-        return {"type": "error", "content": f"JSON 解析失败: {raw[:200]}"}
+
+# ── Solve State ──────────────────────────────────────────────────
+
+
+class _SolveState:
+    """Mutable state for a single solve() invocation."""
+    __slots__ = (
+        "history", "thoughts", "actions",
+        "consecutive_thoughts", "consecutive_ask_user",
+        "recent_action_sigs", "click_target_counts",
+        "active_app", "answer_rejections", "llm_failures",
+        "task_state",
+    )
+
+    def __init__(self):
+        self.history: list[dict] = []
+        self.thoughts: list[str] = []
+        self.actions: list[dict] = []
+        self.consecutive_thoughts: int = 0
+        self.consecutive_ask_user: int = 0
+        self.recent_action_sigs: list[str] = []
+        self.click_target_counts: dict[str, int] = {}
+        self.active_app: str | None = None
+        self.answer_rejections: int = 0
+        self.llm_failures: int = 0
+        self.task_state: TaskState = TaskState()
+
+    def inject_user_msg(self, content: str):
+        """Append a system-injected user message to history."""
+        self.history.append({"role": "user", "content": content})
+
+    def success(self, answer: str) -> dict:
+        """Return a success result dict."""
+        return {
+            "answer": answer,
+            "thoughts": self.thoughts,
+            "actions": self.actions,
+            "step_results": self._build_step_results(),
+            "success": True,
+        }
+
+    def fail(self, answer: str) -> dict:
+        """Return a failure result dict."""
+        return {
+            "answer": answer,
+            "thoughts": self.thoughts,
+            "actions": self.actions,
+            "step_results": self._build_step_results(),
+            "success": False,
+        }
+
+    def _build_step_results(self) -> list[dict]:
+        """Build per-action result list from task_state for the learning pipeline."""
+        results = []
+        for i, a in enumerate(self.actions):
+            cap = a["capability"]
+            key = f"step_{i + 1}_{cap}"
+            result_text = self.task_state.get(key, "")
+            results.append({
+                "capability": cap,
+                "params": a.get("params", {}),
+                "result": result_text,
+                "success": bool(result_text) and "[error]" not in result_text[:200].lower(),
+            })
+        return results
+
+
+# ── Static Helpers ───────────────────────────────────────────────
+
+def _thought_similarity(a: str, b: str) -> float:
+    """Jaccard similarity between two thought strings (word-level)."""
+    words_a = set(a.split())
+    words_b = set(b.split())
+    if not words_a or not words_b:
+        return 0.0
+    return len(words_a & words_b) / len(words_a | words_b)
+
+
+def _format_plan(plan: list[dict]) -> str:
+    """Format plan as a checklist for LLM context injection."""
+    lines = ["[PLAN]"]
+    next_found = False
+    for i, s in enumerate(plan):
+        if s["done"]:
+            lines.append(f"  ✅ {i + 1}. {s['step']}")
+        else:
+            marker = " ← NEXT" if not next_found else ""
+            lines.append(f"  ⬜ {i + 1}. {s['step']} [{s['capability']}]{marker}")
+            if not next_found:
+                next_found = True
+    return "\n".join(lines)
+
+
+def _plan_incomplete_steps(plan: list[dict]) -> list[str]:
+    """Return descriptions of undone steps."""
+    return [s["step"] for s in plan if not s["done"]]

@@ -1,6 +1,9 @@
 """Tests for python_exec — code execution, injected globals, error handling."""
 
-from monad.tools.python_exec import run, MONAD_OUTPUT_DIR
+from monad.tools.python_exec import run
+from monad.config import CONFIG
+
+MONAD_OUTPUT_DIR = CONFIG.output_path
 
 
 class TestBasicExecution:

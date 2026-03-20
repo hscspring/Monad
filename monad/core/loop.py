@@ -1,20 +1,18 @@
 """
 MONAD Core Loop
 The central orchestration: Input → Reasoner.solve() → Reflection
-
-MONAD thinks like a rational person:
-  Analyze → Self-check → Learn → Execute → Reflect
-
-All process steps are printed for user visibility.
 """
 
+from loguru import logger
+
 from monad.cognition.reasoner import Reasoner
+from monad.config import QUIT_COMMANDS, TRUNCATE_SHORT, truncate
 from monad.execution.executor import Executor
+from monad.interface.output import Output
+from monad.interface.voice_input import VoiceInput
 from monad.knowledge.vault import KnowledgeVault
 from monad.learning.reflection import Reflection
 from monad.learning.skill_builder import SkillBuilder
-from monad.interface.output import Output
-from monad.interface.voice_input import VoiceInput
 
 
 class MonadLoop:
@@ -41,17 +39,14 @@ class MonadLoop:
         self.skill_builder = SkillBuilder(vault=self.vault)
         Output.system("  ✓ 技能生成引擎就绪")
 
-        self.output = Output()
-
     def start(self):
         """Start the MONAD interactive loop."""
-        self.output.banner()
+        Output.banner()
         Output.status("MONAD Initialized.")
         Output.status("State: Rational Mode.")
 
-        # Show current capabilities & skills
-        Output.system(f"基础能力: {', '.join(self.executor.capability_names)}")
         skills = self.vault.load_skills()
+        Output.system(f"基础能力: {', '.join(self.executor.capability_names)}")
         if skills:
             Output.system(f"已学技能:\n{skills}")
         else:
@@ -66,15 +61,15 @@ class MonadLoop:
                 if not user_input:
                     continue
 
-                if user_input.lower() in ("quit", "exit", "bye", "q"):
+                if user_input.lower() in QUIT_COMMANDS:
                     Output.status("MONAD Offline.")
                     break
 
-                self.output.divider()
+                Output.divider()
                 Output.phase("接收到新任务")
                 Output.system(f"用户输入: {user_input}")
                 self._process(user_input)
-                self.output.divider()
+                Output.divider()
                 Output.status("Awaiting Objective.\n")
 
             except KeyboardInterrupt:
@@ -82,46 +77,49 @@ class MonadLoop:
                 Output.status("MONAD Offline.")
                 break
             except Exception as e:
+                logger.exception("Unhandled error in main loop")
                 Output.error(str(e))
-                import traceback
-                traceback.print_exc()
                 Output.status("Awaiting Objective.\n")
 
     def _process(self, user_input: str):
         """Process a single user request through the full MONAD pipeline."""
 
-        # ── Phase: Reasoning ─────────────────────────────
         Output.phase("Phase: 推理与执行")
         result = self.reasoner.solve(
             user_input=user_input,
             execute_fn=self.executor.execute,
         )
 
-        # ── Phase: Show Answer ───────────────────────────
         if result.get("answer"):
             Output.result(result["answer"])
 
-        # ── Phase: Reflection ────────────────────────────
+        if not result.get("success") and result.get("actions"):
+            self._run_teardowns(result["actions"])
+
         if result.get("actions"):
             Output.phase("Phase: 反思与学习")
 
-            # Build summary for reflection
             objective = {
                 "goal": user_input,
                 "actions": [a["capability"] for a in result["actions"]],
             }
+            step_results = result.get("step_results", [])
             exec_result = {
                 "success": result.get("success", False),
                 "summary": result.get("answer", ""),
+                "actions_full": result["actions"],
+                "step_results_full": step_results,
                 "steps": [
                     {
                         "step": i + 1,
-                        "action": a["capability"],
-                        "description": str(a.get("params", {}))[:100],
-                        "result": result.get("answer", ""),
-                        "success": result.get("success", False),
+                        "action": sr.get("capability", a["capability"]),
+                        "description": truncate(str(a.get("params", {})), TRUNCATE_SHORT),
+                        "result": truncate(sr.get("result", ""), TRUNCATE_SHORT),
+                        "success": sr.get("success", False),
                     }
-                    for i, a in enumerate(result["actions"])
+                    for i, (a, sr) in enumerate(
+                        zip(result["actions"],
+                            step_results or [{}] * len(result["actions"])))
                 ],
             }
 
@@ -137,10 +135,30 @@ class MonadLoop:
         else:
             Output.system("无执行动作，跳过反思阶段")
 
-        # Show stats
         n_thoughts = len(result.get("thoughts", []))
         n_actions = len(result.get("actions", []))
-        Output.system(f"本次任务统计: {n_thoughts} 次思考, {n_actions} 次行动, 结果: {'成功' if result.get('success') else '失败'}")
+        Output.system(
+            f"本次任务统计: {n_thoughts} 次思考, {n_actions} 次行动, "
+            f"结果: {'成功' if result.get('success') else '失败'}"
+        )
+
+    def _run_teardowns(self, actions: list[dict]):
+        """Run teardown skills for any capabilities that require cleanup."""
+        seen = set()
+        for action in actions:
+            cap = action.get("capability", "")
+            if cap in seen:
+                continue
+            seen.add(cap)
+            teardown = self.executor.get_skill_teardown(cap)
+            if teardown:
+                Output.phase("Phase: 资源清理")
+                Output.system(f"执行 teardown: {teardown} (因 {cap} 需要清理)")
+                try:
+                    self.executor.execute(teardown)
+                except Exception as e:
+                    logger.warning(f"Teardown '{teardown}' failed: {e}")
+                    Output.warn(f"Teardown '{teardown}' 执行失败: {e}")
 
     def run_once(self, user_input: str) -> dict:
         """Run once for testing."""

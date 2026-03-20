@@ -4,10 +4,21 @@ from unittest.mock import patch, MagicMock
 import pytest
 
 from monad.tools.desktop_control import (
-    run, _find_element, _find_all_matches, _filter_elements, _is_garbled,
-    _is_self_noise, _hotkey, _get_frontmost_app, _is_same_app,
+    run, _find_all_matches, _filter_elements, _is_garbled,
+    _SELF_NOISE_RE, _hotkey, _get_frontmost_app, _is_same_app,
     TOOL_META, IS_MAC, IS_WIN,
 )
+
+
+def _find_element(elements, target_text):
+    """Compatibility wrapper for tests."""
+    best, _ = _find_all_matches(elements, target_text)
+    return best
+
+
+def _is_self_noise(text):
+    """Compatibility wrapper for tests."""
+    return bool(_SELF_NOISE_RE.search(text))
 
 
 # ---------------------------------------------------------------------------

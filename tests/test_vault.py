@@ -54,6 +54,9 @@ class _TmpConfig:
     def cache_path(self):
         return self.knowledge_path / "cache"
 
+    def skill_dir(self, name: str) -> Path:
+        return self.skills_path / name
+
 
 @pytest.fixture
 def vault(tmp_path):
@@ -115,6 +118,19 @@ class TestExperienceStaging:
             vault.save_experience(f"task {i}", f"summary {i}", tags=[])
         promoted = vault.config.experiences_path / "accumulated_experiences.md"
         assert not promoted.exists()
+
+    def test_promotion_picks_best_quality(self, vault):
+        """Best = most tags + longest summary, not just the last entry."""
+        vault.save_experience("web task 0", "short", tags=["web"])
+        vault.save_experience(
+            "web task 1",
+            "This is a much longer and more detailed summary with actionable insights",
+            tags=["web", "fetch", "analysis"])
+        vault.save_experience("web task 2", "brief", tags=["web"])
+        promoted = vault.config.experiences_path / "accumulated_experiences.md"
+        assert promoted.exists()
+        content = promoted.read_text(encoding="utf-8")
+        assert "much longer and more detailed" in content
 
 
 # ---------------------------------------------------------------------------

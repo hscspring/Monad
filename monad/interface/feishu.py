@@ -13,7 +13,9 @@ import threading
 
 import lark_oapi as lark
 from lark_oapi.api.im.v1 import *
+from loguru import logger
 
+from monad.config import init_workspace
 from monad.core.loop import MonadLoop
 from monad.interface.output import Output
 
@@ -36,9 +38,8 @@ def send_feishu_msg(client_instance, chat_type, data, text_content):
         )
         response = client_instance.im.v1.message.create(request)
         if not response.success():
-            print(f"message.create failed, code: {response.code}, msg: {response.msg}")
+            logger.warning(f"message.create failed, code: {response.code}, msg: {response.msg}")
     else:
-        # Group chat reply
         request: ReplyMessageRequest = (
             ReplyMessageRequest.builder()
             .message_id(data.event.message.message_id)
@@ -52,7 +53,7 @@ def send_feishu_msg(client_instance, chat_type, data, text_content):
         )
         response: ReplyMessageResponse = client_instance.im.v1.message.reply(request)
         if not response.success():
-            print(f"message.reply failed, code: {response.code}, msg: {response.msg}")
+            logger.warning(f"message.reply failed, code: {response.code}, msg: {response.msg}")
 
 
 def process_monad_async(monad_loop, res_content, client_instance, chat_type, data):
@@ -64,9 +65,10 @@ def process_monad_async(monad_loop, res_content, client_instance, chat_type, dat
         try:
             monad_loop._process(res_content)
         except Exception as e:
+            logger.exception("Feishu MONAD processing error")
             Output.error(f"处理由于异常中断: {str(e)}")
         finally:
-            q.put(None)  # Sentinel: MONAD execution finished
+            q.put(None)
 
     threading.Thread(target=run_monad, daemon=True).start()
 
@@ -87,21 +89,19 @@ def process_monad_async(monad_loop, res_content, client_instance, chat_type, dat
 
 def start_feishu():
     """Start the Feishu bot interface."""
+    init_workspace()
     app_id = os.getenv("APP_ID", "")
     app_secret = os.getenv("APP_SECRET", "")
 
     if not app_id or not app_secret:
-        print("\n[!] Error: APP_ID and APP_SECRET environment variables are required.")
-        print("    Usage: APP_ID=xxx APP_SECRET=yyy monad --feishu\n")
+        Output.error("APP_ID and APP_SECRET environment variables are required.")
+        Output.system("Usage: APP_ID=xxx APP_SECRET=yyy monad --feishu")
         return
 
-    # Initialize MONAD loop once (shared across all messages)
     monad_loop = MonadLoop()
 
-    # Create Lark client
     client = lark.Client.builder().app_id(app_id).app_secret(app_secret).build()
 
-    # Message handler
     def do_p2_im_message_receive_v1(data: P2ImMessageReceiveV1) -> None:
         res_content = ""
         if data.event.message.message_type == "text":
@@ -117,7 +117,6 @@ def start_feishu():
             daemon=True,
         ).start()
 
-    # Register event handler
     event_handler = (
         lark.EventDispatcherHandler.builder("", "")
         .register_p2_im_message_receive_v1(do_p2_im_message_receive_v1)
@@ -131,8 +130,6 @@ def start_feishu():
         log_level=lark.LogLevel.DEBUG,
     )
 
-    print("\n    ╔══════════════════════════════════════╗")
-    print("    ║      M O N A D  Feishu Bot            ║")
-    print("    ╚══════════════════════════════════════╝\n")
-    print(f"[MONAD] 飞书节点启动成功，APP_ID={app_id[:8]}..., 开始监听...")
+    Output.banner()
+    Output.status(f"飞书节点启动成功，APP_ID={app_id[:8]}..., 开始监听...")
     ws_client.start()

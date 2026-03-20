@@ -13,10 +13,14 @@ list of UI elements with coordinates, keeping the interaction text-only.
 
 import os
 import platform
+import re
 import time
-import json
 import tempfile
-from pathlib import Path
+
+from monad.config import (
+    MAX_OCR_ELEMENTS, MIN_OCR_TEXT_LEN,
+    OCR_CONFIDENCE_THRESHOLD, WINDOW_FILTER_MARGIN, TIMEOUT_SUBPROCESS,
+)
 
 IS_MAC = platform.system() == "Darwin"
 IS_WIN = platform.system() == "Windows"
@@ -24,6 +28,8 @@ IS_WIN = platform.system() == "Windows"
 _ocr_engine = None
 _SCREENSHOT_PATH = os.path.join(tempfile.gettempdir(), "monad_screen.png")
 
+
+# ── OCR ──────────────────────────────────────────────────────────
 
 def _get_ocr():
     """Lazy-init OCR engine."""
@@ -34,44 +40,111 @@ def _get_ocr():
     return _ocr_engine
 
 
-def _get_window_id(process_name):
-    """Get CGWindowID for the main window of a process (macOS)."""
+def _ocr(image_path):
+    """Run OCR on image. Returns list of {text, x, y, w, h, confidence}."""
+    engine = _get_ocr()
+    result, _ = engine(image_path)
+    if not result:
+        return []
+
+    elements = []
+    for bbox, text, conf in result:
+        xs = [p[0] for p in bbox]
+        ys = [p[1] for p in bbox]
+        x1, y1 = int(min(xs)), int(min(ys))
+        x2, y2 = int(max(xs)), int(max(ys))
+        elements.append({
+            "text": text,
+            "x": (x1 + x2) // 2, "y": (y1 + y2) // 2,
+            "left": x1, "top": y1,
+            "width": x2 - x1, "height": y2 - y1,
+            "confidence": round(conf, 2),
+        })
+    return elements
+
+
+# ── Window Management (macOS) ────────────────────────────────────
+
+def _list_windows(process_name=None):
+    """List on-screen windows, optionally filtered by process name.
+
+    Returns list of dicts with kCGWindowOwnerName, kCGWindowName,
+    kCGWindowNumber, kCGWindowBounds.
+    """
     if not IS_MAC:
-        return None
+        return []
     try:
         import Quartz
-        windows = Quartz.CGWindowListCopyWindowInfo(
+        raw = Quartz.CGWindowListCopyWindowInfo(
             Quartz.kCGWindowListOptionOnScreenOnly | Quartz.kCGWindowListExcludeDesktopElements,
-            Quartz.kCGNullWindowID
+            Quartz.kCGNullWindowID,
         )
-        for w in windows:
-            if w.get("kCGWindowOwnerName", "") == process_name:
-                name = w.get("kCGWindowName", "")
-                if name:
-                    return w["kCGWindowNumber"]
-        for w in windows:
-            if w.get("kCGWindowOwnerName", "") == process_name:
-                return w["kCGWindowNumber"]
+        if process_name:
+            return [w for w in raw if w.get("kCGWindowOwnerName", "") == process_name]
+        return list(raw)
     except (ImportError, Exception):
+        return []
+
+
+def _get_window_id(process_name):
+    """Get CGWindowID for the main window of a process (macOS)."""
+    windows = _list_windows(process_name)
+    for w in windows:
+        if w.get("kCGWindowName", ""):
+            return w["kCGWindowNumber"]
+    return windows[0]["kCGWindowNumber"] if windows else None
+
+
+def _get_window_bounds(process_name):
+    """Get the LARGEST window bounds for a process in logical pixels (macOS)."""
+    windows = _list_windows(process_name)
+    best, best_area = None, 0
+    for w in windows:
+        b = w.get("kCGWindowBounds", {})
+        if not b:
+            continue
+        area = b.get("Width", 0) * b.get("Height", 0)
+        if area > best_area:
+            best_area = area
+            best = {
+                "left": int(b["X"]), "top": int(b["Y"]),
+                "width": int(b["Width"]), "height": int(b["Height"]),
+            }
+    return best
+
+
+def _get_frontmost_app():
+    """Return the name of the frontmost application (macOS only)."""
+    if not IS_MAC:
+        return None
+    import subprocess
+    try:
+        r = subprocess.run(
+            ["osascript", "-e",
+             'tell application "System Events" to get name of first application process whose frontmost is true'],
+            capture_output=True, text=True, timeout=TIMEOUT_SUBPROCESS)
+        if r.returncode == 0:
+            return r.stdout.strip()
+    except Exception:
         pass
     return None
 
 
+# ── Screenshot ───────────────────────────────────────────────────
+
 def _screenshot_window(process_name):
-    """Capture a specific window using macOS screencapture (works even if occluded)."""
+    """Capture a specific window using macOS screencapture."""
     wid = _get_window_id(process_name)
     if wid is None:
         return None, None
     import subprocess
     result = subprocess.run(
         ["screencapture", "-l", str(wid), "-o", "-x", _SCREENSHOT_PATH],
-        capture_output=True, text=True, timeout=5
+        capture_output=True, text=True, timeout=TIMEOUT_SUBPROCESS,
     )
     if result.returncode != 0:
         return None, None
     bounds = _get_window_bounds(process_name)
-    if not bounds:
-        return _SCREENSHOT_PATH, None
     return _SCREENSHOT_PATH, bounds
 
 
@@ -92,29 +165,7 @@ def _screenshot(region=None):
     return _SCREENSHOT_PATH
 
 
-def _ocr(image_path):
-    """Run OCR on image. Returns list of {text, x, y, w, h, confidence}."""
-    engine = _get_ocr()
-    result, _ = engine(image_path)
-    if not result:
-        return []
-
-    elements = []
-    for bbox, text, conf in result:
-        xs = [p[0] for p in bbox]
-        ys = [p[1] for p in bbox]
-        x1, y1 = int(min(xs)), int(min(ys))
-        x2, y2 = int(max(xs)), int(max(ys))
-        cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
-        elements.append({
-            "text": text,
-            "x": cx, "y": cy,
-            "left": x1, "top": y1,
-            "width": x2 - x1, "height": y2 - y1,
-            "confidence": round(conf, 2),
-        })
-    return elements
-
+# ── Input Simulation ─────────────────────────────────────────────
 
 def _click(x, y, button="left"):
     """Click at screen coordinates."""
@@ -145,7 +196,7 @@ def _type_text(text, interval=0.02):
 
 
 def _hotkey(*keys):
-    """Press a hotkey combo, e.g. _hotkey('cmd', 'space') or _hotkey('ctrl', 'a')."""
+    """Press a hotkey combo, e.g. _hotkey('cmd', 'space')."""
     from pynput.keyboard import Controller as KeyController, Key
     kb = KeyController()
 
@@ -155,10 +206,8 @@ def _hotkey(*keys):
         "alt": Key.alt, "option": Key.alt,
         "shift": Key.shift,
         "enter": Key.enter, "return": Key.enter,
-        "tab": Key.tab,
-        "space": Key.space,
-        "backspace": Key.backspace,
-        "delete": Key.delete,
+        "tab": Key.tab, "space": Key.space,
+        "backspace": Key.backspace, "delete": Key.delete,
         "escape": Key.esc, "esc": Key.esc,
         "up": Key.up, "down": Key.down,
         "left": Key.left, "right": Key.right,
@@ -185,142 +234,88 @@ def _hotkey(*keys):
         kb.release(k)
 
 
-_MAX_ELEMENTS = 50
-_MIN_TEXT_LEN = 2
-_GARBLE_RE = None
+# ── OCR Filtering ────────────────────────────────────────────────
+
+_GARBLE_RE = re.compile(r'^[^\w\u4e00-\u9fff]{1,4}$')
+_ALNUM_RE = re.compile(r'[\w\u4e00-\u9fff]')
+_SELF_NOISE_RE = re.compile(
+    r'MONAD[】\]」]|[【\[「]MONAD|'
+    r'Reasoning\s*Turn|desktop_control|python_exec|'
+    r'web_fetch|shell\]|'
+    r'LLM\s*返回类型|正在调用\s*LLM|LLM\s*进行推理|'
+    r'检测到空洞回答|强制要求执行|声称完成操作|'
+    r'已在前台.*跳过重复|自动截屏|截屏替代|'
+    r'at\s*[（(]\s*\d+\s*[,，]\s*\d+\s*[）)].*size\s*\d+x\d+|'
+    r'size\s+\d+x\d+.*at\s*[（(]|'
+    r'\d+x\d+.*at\s*[（(]\s*\d+',
+    re.IGNORECASE
+)
 
 
 def _is_garbled(text):
     """Check if text looks like OCR noise rather than real UI text."""
-    global _GARBLE_RE
-    if _GARBLE_RE is None:
-        import re
-        _GARBLE_RE = re.compile(r'^[^\w\u4e00-\u9fff]{1,4}$')
     t = text.strip()
-    if len(t) < _MIN_TEXT_LEN:
+    if len(t) < MIN_OCR_TEXT_LEN:
         return True
     if _GARBLE_RE.match(t):
         return True
     if len(t) <= 3:
-        import re
-        alnum = len(re.findall(r'[\w\u4e00-\u9fff]', t))
+        alnum = len(_ALNUM_RE.findall(t))
         if alnum / len(t) < 0.6:
             return True
     return False
 
 
-_SELF_NOISE_RE = None
-
-
-def _is_self_noise(text):
-    """Detect MONAD's own terminal output appearing in screenshots."""
-    global _SELF_NOISE_RE
-    if _SELF_NOISE_RE is None:
-        import re
-        _SELF_NOISE_RE = re.compile(
-            r'MONAD[】\]」]|[【\[「]MONAD|'
-            r'Reasoning\s*Turn|desktop_control|python_exec|'
-            r'web_fetch|shell\]|'
-            r'LLM\s*返回类型|正在调用\s*LLM|LLM\s*进行推理|'
-            r'检测到空洞回答|强制要求执行|声称完成操作|'
-            r'已在前台.*跳过重复|自动截屏|截屏替代|'
-            r'at\s*[（(]\s*\d+\s*[,，]\s*\d+\s*[）)].*size\s*\d+x\d+|'
-            r'size\s+\d+x\d+.*at\s*[（(]|'
-            r'\d+x\d+.*at\s*[（(]\s*\d+',
-            re.IGNORECASE
-        )
-    return bool(_SELF_NOISE_RE.search(text))
-
-
 def _filter_elements(elements, app_bounds=None):
-    """Remove OCR noise, terminal self-output, and limit to relevant elements.
-
-    If app_bounds is provided ({left, top, width, height} in logical coords),
-    only elements within or near the app window are kept. This prevents MONAD's
-    own terminal output from leaking into the element list. A margin is added
-    to include overlay panels (search dropdowns, popovers) that extend beyond
-    the window edges.
-    """
-    MARGIN = 60  # logical pixels beyond window bounds for overlays
+    """Remove OCR noise, terminal self-output, and limit to relevant elements."""
     if app_bounds:
-        b_left = app_bounds["left"] - MARGIN
-        b_top = app_bounds["top"] - MARGIN
-        b_right = app_bounds["left"] + app_bounds["width"] + MARGIN
-        b_bottom = app_bounds["top"] + app_bounds["height"] + MARGIN
+        b_left = app_bounds["left"] - WINDOW_FILTER_MARGIN
+        b_top = app_bounds["top"] - WINDOW_FILTER_MARGIN
+        b_right = app_bounds["left"] + app_bounds["width"] + WINDOW_FILTER_MARGIN
+        b_bottom = app_bounds["top"] + app_bounds["height"] + WINDOW_FILTER_MARGIN
 
     filtered = []
     for e in elements:
         if _is_garbled(e["text"]):
             continue
-        if e["confidence"] < 0.5:
+        if e["confidence"] < OCR_CONFIDENCE_THRESHOLD:
             continue
-        if _is_self_noise(e["text"]):
+        if _SELF_NOISE_RE.search(e["text"]):
             continue
         if app_bounds:
             if not (b_left <= e["x"] <= b_right and b_top <= e["y"] <= b_bottom):
                 continue
         filtered.append(e)
     filtered.sort(key=lambda e: e["width"] * e["height"], reverse=True)
-    return filtered[:_MAX_ELEMENTS]
+    return filtered[:MAX_OCR_ELEMENTS]
 
 
-def _get_window_bounds(process_name):
-    """Get the LARGEST window bounds for a process in logical pixels (macOS).
+# ── Element Matching ─────────────────────────────────────────────
 
-    Uses Quartz CGWindowList to find all on-screen windows owned by the process,
-    then returns the one with the largest area. This avoids picking up tiny
-    notification floats or mini-windows that osascript's 'window 1' might return.
-    """
-    if not IS_MAC:
-        return None
-    try:
-        import Quartz
-        windows = Quartz.CGWindowListCopyWindowInfo(
-            Quartz.kCGWindowListOptionOnScreenOnly | Quartz.kCGWindowListExcludeDesktopElements,
-            Quartz.kCGNullWindowID
-        )
-        best = None
-        best_area = 0
-        for w in windows:
-            if w.get("kCGWindowOwnerName", "") == process_name:
-                b = w.get("kCGWindowBounds", {})
-                if not b:
-                    continue
-                area = b.get("Width", 0) * b.get("Height", 0)
-                if area > best_area:
-                    best_area = area
-                    best = {"left": int(b["X"]), "top": int(b["Y"]),
-                            "width": int(b["Width"]), "height": int(b["Height"])}
-        return best
-    except Exception:
-        pass
-    return None
+def _find_all_matches(elements, target_text):
+    """Find all elements matching target text. Returns (best_match, all_matches)."""
+    target = target_text.lower().strip()
+    exact = [e for e in elements if e["text"].lower().strip() == target]
+    partial = [e for e in elements if target in e["text"].lower() and e["text"].lower().strip() != target]
+    all_matches = exact + partial
+    if not all_matches:
+        return None, []
+    if len(exact) >= 2:
+        exact.sort(key=lambda e: e["y"])
+        best = exact[-1]
+    elif exact:
+        best = exact[0]
+    else:
+        partial.sort(key=lambda e: len(e["text"]))
+        best = partial[0]
+    return best, all_matches
 
 
-def _get_frontmost_app():
-    """Return the name of the frontmost application (macOS only)."""
-    if not IS_MAC:
-        return None
-    import subprocess
-    try:
-        r = subprocess.run(
-            ["osascript", "-e",
-             'tell application "System Events" to get name of first application process whose frontmost is true'],
-            capture_output=True, text=True, timeout=3)
-        if r.returncode == 0:
-            return r.stdout.strip()
-    except Exception:
-        pass
-    return None
-
+# ── App Aliases ──────────────────────────────────────────────────
 
 _APP_ALIASES = {
-    "lark": {"feishu", "飞书"},
-    "feishu": {"lark", "飞书"},
-    "飞书": {"lark", "feishu"},
-    "wechat": {"weixin", "微信"},
-    "weixin": {"wechat", "微信"},
-    "微信": {"wechat", "weixin"},
+    "lark": {"feishu", "飞书"}, "feishu": {"lark", "飞书"}, "飞书": {"lark", "feishu"},
+    "wechat": {"weixin", "微信"}, "weixin": {"wechat", "微信"}, "微信": {"wechat", "weixin"},
 }
 
 
@@ -333,13 +328,15 @@ def _is_same_app(requested: str, actual: str) -> bool:
     return any(alias in a for alias in aliases)
 
 
+# ── Activate ─────────────────────────────────────────────────────
+
 def _activate_app(app_name):
     """Bring an application to the foreground."""
     import subprocess
     if IS_MAC:
         script = f'tell application "{app_name}" to activate'
         result = subprocess.run(["osascript", "-e", script],
-                                capture_output=True, text=True, timeout=5)
+                                capture_output=True, text=True, timeout=TIMEOUT_SUBPROCESS)
         if result.returncode == 0:
             time.sleep(1.5)
             front = _get_frontmost_app()
@@ -356,7 +353,7 @@ def _activate_app(app_name):
             f'else{{Write-Error "Process not found"}}'
         )
         result = subprocess.run(["powershell", "-Command", code],
-                                capture_output=True, text=True, timeout=5)
+                                capture_output=True, text=True, timeout=TIMEOUT_SUBPROCESS)
         if result.returncode == 0:
             time.sleep(1.5)
             return f'Activated "{app_name}" (brought to foreground)'
@@ -365,49 +362,10 @@ def _activate_app(app_name):
         return f'activate is not supported on {platform.system()} yet. Use wmctrl or xdotool.'
 
 
-def _find_all_matches(elements, target_text):
-    """Find all elements matching target text. Returns (best_match, all_matches).
-
-    Matching priority for exact matches:
-    - Multiple exact matches: prefer the one with largest y. In search UIs, the input
-      field is at the top (small y) and the result list is below (larger y). Clicking
-      the input text is almost always wrong; the intended result is further down.
-    - 1 exact: return it directly.
-
-    Partial matches: prefer shorter text (more specific).
-    """
-    target = target_text.lower().strip()
-    exact = [e for e in elements if e["text"].lower().strip() == target]
-    partial = [e for e in elements if target in e["text"].lower() and e["text"].lower().strip() != target]
-    all_matches = exact + partial
-    if not all_matches:
-        return None, []
-    if len(exact) >= 2:
-        exact.sort(key=lambda e: e["y"])
-        best = exact[-1]  # largest y = lowest on screen = result list, not input field
-    elif exact:
-        best = exact[0]
-    else:
-        partial.sort(key=lambda e: len(e["text"]))
-        best = partial[0]
-    return best, all_matches
-
-
-def _find_element(elements, target_text):
-    """Find the best matching element by text (case-insensitive substring match)."""
-    best, _ = _find_all_matches(elements, target_text)
-    return best
-
-
-
+# ── Coordinate Adjustment ────────────────────────────────────────
 
 def _adjust_coords_to_screen(elements, img_path, window_bounds):
-    """Convert OCR pixel coords from a window screenshot to screen logical coords.
-
-    screencapture -l on Retina produces 2x pixel images.
-    Screen coords = window_position + ocr_pixel / scale_factor.
-    Modifies elements in place.
-    """
+    """Convert OCR pixel coords from a window screenshot to screen logical coords."""
     try:
         from PIL import Image
         img = Image.open(img_path)
@@ -429,18 +387,12 @@ def _adjust_coords_to_screen(elements, img_path, window_bounds):
         e["height"] = int(e["height"] / scale_y)
 
 
+# ── Capture & Locate ─────────────────────────────────────────────
+
 def _capture_and_locate(target_text):
-    """Capture the full screen, OCR, and find the target element.
-
-    Uses mss full-screen capture so overlay panels (search dropdowns, popovers)
-    are always included. mss returns logical-resolution images on macOS, so OCR
-    coordinates map directly to screen logical coords usable by pynput — no scaling.
-
-    Elements are filtered to the frontmost app's window region (+margin) to
-    exclude MONAD's own terminal output from the results.
+    """Capture full screen, OCR, find target element.
 
     Returns (target_element, alternatives_info_str) or an error string.
-    The alternatives_info_str is empty when there's only one match.
     """
     front_app = _get_frontmost_app()
     app_bounds = _get_window_bounds(front_app) if front_app else None
@@ -465,169 +417,200 @@ def _capture_and_locate(target_text):
     return f'Element "{target_text}" not found. Visible elements: {clean}'
 
 
+def _screenshot_and_list_elements():
+    """Capture screen, OCR, filter, return formatted element list string."""
+    front_app = _get_frontmost_app()
+    scope = f"{front_app} screen" if front_app else "full screen"
+    img_path = _screenshot()
+    elements = _ocr(img_path)
+    if not elements:
+        return f"Screen captured ({scope}) but no text elements detected."
+    app_bounds = _get_window_bounds(front_app) if front_app else None
+    elements = _filter_elements(elements, app_bounds)
+    if not elements:
+        return f"Screen captured ({scope}) but all elements were filtered as noise."
+    return _format_elements(elements, scope)
+
+
+def _format_elements(elements, scope="screen"):
+    """Format element list into a readable string."""
+    lines = [f"[{scope}] Found {len(elements)} UI elements:"]
+    for e in elements:
+        lines.append(f'  "{e["text"]}" at ({e["x"]},{e["y"]}) size {e["width"]}x{e["height"]}')
+    return "\n".join(lines)
+
+
+# ── Command Handlers ─────────────────────────────────────────────
+
+def _cmd_activate(arg, **kwargs):
+    if not arg:
+        return "Error: activate requires app name. Usage: activate Lark"
+    result = _activate_app(arg)
+    if "verified in foreground" not in result and "foreground app is now" not in result:
+        return result
+    # Auto-screenshot after successful activation
+    front_app = _get_frontmost_app()
+    try:
+        img_path = _screenshot()
+    except Exception:
+        return result
+    elements = _ocr(img_path)
+    if not elements:
+        return result
+    app_bounds = _get_window_bounds(front_app) if front_app else None
+    elements = _filter_elements(elements, app_bounds)
+    if not elements:
+        return result
+    scope = f"{front_app} screen" if front_app else "full screen"
+    return f"{result}\n{_format_elements(elements, f'Auto-screenshot of {scope}')}\n\nNow use click/type/hotkey to interact."
+
+
+def _cmd_screenshot(arg="", **kwargs):
+    return _screenshot_and_list_elements()
+
+
+def _cmd_click(arg, **kwargs):
+    if not arg:
+        return "Error: click requires target text. Usage: click <text>"
+    result = _capture_and_locate(arg)
+    if isinstance(result, str):
+        return result
+    target, alt_info = result
+    _click(target["x"], target["y"])
+    header_hint = ""
+    if target["y"] < 60:
+        header_hint = (
+            f' NOTE: This element is near the top of the window (y={target["y"]}), '
+            f'likely a window header/title. If this is a chat app, the chat with '
+            f'"{target["text"]}" may ALREADY be open. Try: type <message> to send '
+            f'a message directly, or click the input area at the bottom of the window.'
+        )
+    elif target["y"] < 120 and not alt_info:
+        header_hint = (
+            f' WARNING: Only one "{target["text"]}" found at y={target["y"]} (near window top). '
+            f'This may be the SEARCH INPUT field, not the result list below. '
+            f'If the UI did not change, take a screenshot to check if the search results '
+            f'appeared below. The contact in the results list will be at a larger y coordinate.'
+        )
+    return f'Clicked "{target["text"]}" at ({target["x"]},{target["y"]}).{alt_info}{header_hint}'
+
+
+def _cmd_double_click(arg, **kwargs):
+    if not arg:
+        return "Error: double_click requires target text."
+    result = _capture_and_locate(arg)
+    if isinstance(result, str):
+        return result
+    target, alt_info = result
+    _double_click(target["x"], target["y"])
+    return f'Double-clicked "{target["text"]}" at ({target["x"]},{target["y"]}).{alt_info}'
+
+
+def _cmd_click_xy(arg, **kwargs):
+    coords = arg.split()
+    if len(coords) < 2:
+        return "Error: click_xy requires x y. Usage: click_xy 320 450"
+    x, y = int(coords[0]), int(coords[1])
+    _click(x, y)
+    return f"Clicked at ({x},{y})"
+
+
+def _cmd_type(arg, **kwargs):
+    if not arg:
+        return "Error: type requires text. Usage: type Hello world"
+    _type_text(arg)
+    return f"Typed: {arg[:50]}{'...' if len(arg) > 50 else ''}"
+
+
+def _cmd_hotkey(arg, **kwargs):
+    if not arg:
+        return "Error: hotkey requires keys. Usage: hotkey cmd space"
+    keys = arg.split()
+    _hotkey(*keys)
+    return f"Pressed hotkey: {' + '.join(keys)}"
+
+
+def _cmd_find(arg, **kwargs):
+    if not arg:
+        return "Error: find requires target text."
+    result = _capture_and_locate(arg)
+    if isinstance(result, str):
+        return result
+    target, alt_info = result
+    return f'Found "{target["text"]}" at ({target["x"]},{target["y"]}).{alt_info}'
+
+
+def _cmd_wait(arg, **kwargs):
+    secs = float(arg) if arg else 1.0
+    secs = min(secs, 10.0)
+    time.sleep(secs)
+    return f"Waited {secs}s"
+
+
+_COMMANDS = {
+    "activate": _cmd_activate,
+    "screenshot": _cmd_screenshot,
+    "click": _cmd_click,
+    "double_click": _cmd_double_click,
+    "click_xy": _cmd_click_xy,
+    "type": _cmd_type,
+    "hotkey": _cmd_hotkey,
+    "find": _cmd_find,
+    "wait": _cmd_wait,
+}
+
+
+# ── Main Entry Point ─────────────────────────────────────────────
+
 def run(action: str = "", **kwargs) -> str:
     """Execute a desktop control action.
 
     Args:
-        action: One of:
-            - "screenshot": Capture screen and OCR, return UI elements list
-            - "click <text>": Click on UI element matching text
-            - "double_click <text>": Double-click on element matching text
-            - "click_xy <x> <y>": Click at exact coordinates
-            - "type <text>": Type text via keyboard
-            - "hotkey <key1> <key2> ...": Press hotkey combo (e.g. "hotkey cmd space")
-            - "wait <seconds>": Wait for UI to update
-            - "find <text>": Check if text element exists on screen
-            - "activate <app>": Bring an app to the foreground (e.g. "activate Lark")
-
-        Also accepts params as separate kwargs (e.g. action="click", text="OK").
-
-    Returns:
-        Result string describing what happened and current screen state.
+        action: One of: screenshot, click <text>, double_click <text>,
+                click_xy <x> <y>, type <text>, hotkey <key1> <key2> ...,
+                wait <seconds>, find <text>, activate <app>
     """
     if not action:
-        return "Error: No action specified. Use: screenshot, click, type, hotkey, find, wait, click_xy, activate"
+        return f"Error: No action specified. Available: {', '.join(_COMMANDS)}"
 
     parts = action.strip().split(None, 1)
     cmd = parts[0].lower()
     arg = parts[1] if len(parts) > 1 else ""
 
+    # Resolve arg from kwargs if not inline
     if not arg:
-        if cmd in ("click", "double_click", "find"):
-            arg = kwargs.get("text", "") or kwargs.get("target", "")
-        elif cmd == "type":
-            arg = kwargs.get("text", "") or kwargs.get("content", "")
-        elif cmd == "hotkey":
-            keys = kwargs.get("keys", "")
-            arg = " ".join(keys) if isinstance(keys, list) else keys
+        _kwarg_map = {
+            "click": ("text", "target"),
+            "double_click": ("text", "target"),
+            "find": ("text", "target"),
+            "type": ("text", "content"),
+            "click_xy": None,
+            "hotkey": None,
+            "wait": None,
+            "activate": ("app", "name"),
+        }
+        kw_keys = _kwarg_map.get(cmd)
+        if kw_keys:
+            for k in kw_keys:
+                if kwargs.get(k):
+                    arg = kwargs[k]
+                    break
         elif cmd == "click_xy":
             x, y = kwargs.get("x", ""), kwargs.get("y", "")
             if x and y:
                 arg = f"{x} {y}"
+        elif cmd == "hotkey":
+            keys = kwargs.get("keys", "")
+            arg = " ".join(keys) if isinstance(keys, list) else keys
         elif cmd == "wait":
             arg = str(kwargs.get("seconds", kwargs.get("duration", "")))
-        elif cmd == "activate":
-            arg = kwargs.get("app", "") or kwargs.get("name", "")
+
+    handler = _COMMANDS.get(cmd)
+    if not handler:
+        return f"Unknown action: {cmd}. Available: {', '.join(_COMMANDS)}"
 
     try:
-        if cmd == "activate":
-            if not arg:
-                return "Error: activate requires app name. Usage: activate Lark"
-            activate_result = _activate_app(arg)
-            if "verified in foreground" not in activate_result and "foreground app is now" not in activate_result:
-                return activate_result
-            front_app = _get_frontmost_app()
-            try:
-                img_path = _screenshot()
-            except Exception:
-                return activate_result
-            elements = _ocr(img_path)
-            if not elements:
-                return activate_result
-            app_bounds = _get_window_bounds(front_app) if front_app else None
-            elements = _filter_elements(elements, app_bounds)
-            if not elements:
-                return activate_result
-            scope = f"{front_app} screen" if front_app else "full screen"
-            lines = [activate_result,
-                     f"[Auto-screenshot of {scope}] Found {len(elements)} UI elements:"]
-            for e in elements:
-                lines.append(f'  "{e["text"]}" at ({e["x"]},{e["y"]}) size {e["width"]}x{e["height"]}')
-            lines.append("\nNow use click/type/hotkey to interact.")
-            return "\n".join(lines)
-
-        elif cmd == "screenshot":
-            front_app = _get_frontmost_app()
-            scope = f"{front_app} screen" if front_app else "full screen"
-            img_path = _screenshot()
-            elements = _ocr(img_path)
-            if not elements:
-                return f"Screen captured ({scope}) but no text elements detected."
-            app_bounds = _get_window_bounds(front_app) if front_app else None
-            elements = _filter_elements(elements, app_bounds)
-            if not elements:
-                return f"Screen captured ({scope}) but all elements were filtered as noise. Try clicking or waiting."
-            lines = [f"[{scope}] Found {len(elements)} UI elements:"]
-            for e in elements:
-                lines.append(f'  "{e["text"]}" at ({e["x"]},{e["y"]}) size {e["width"]}x{e["height"]}')
-            return "\n".join(lines)
-
-        elif cmd == "click":
-            if not arg:
-                return "Error: click requires target text. Usage: click <text>"
-            result = _capture_and_locate(arg)
-            if isinstance(result, str):
-                return result
-            target, alt_info = result
-            _click(target["x"], target["y"])
-            header_hint = ""
-            if target["y"] < 60:
-                header_hint = (
-                    f' NOTE: This element is near the top of the window (y={target["y"]}), '
-                    f'likely a window header/title. If this is a chat app, the chat with '
-                    f'"{target["text"]}" may ALREADY be open. Try: type <message> to send '
-                    f'a message directly, or click the input area at the bottom of the window.'
-                )
-            elif target["y"] < 120 and not alt_info:
-                # Single match near the top of the window — could be the search INPUT field
-                # (where the user typed the text), not the search RESULT below it.
-                header_hint = (
-                    f' WARNING: Only one "{target["text"]}" found at y={target["y"]} (near window top). '
-                    f'This may be the SEARCH INPUT field, not the result list below. '
-                    f'If the UI did not change, take a screenshot to check if the search results '
-                    f'appeared below. The contact in the results list will be at a larger y coordinate.'
-                )
-            return f'Clicked "{target["text"]}" at ({target["x"]},{target["y"]}).{alt_info}{header_hint}'
-
-        elif cmd == "double_click":
-            if not arg:
-                return "Error: double_click requires target text."
-            result = _capture_and_locate(arg)
-            if isinstance(result, str):
-                return result
-            target, alt_info = result
-            _double_click(target["x"], target["y"])
-            return f'Double-clicked "{target["text"]}" at ({target["x"]},{target["y"]}).{alt_info}'
-
-        elif cmd == "click_xy":
-            coords = arg.split()
-            if len(coords) < 2:
-                return "Error: click_xy requires x y. Usage: click_xy 320 450"
-            x, y = int(coords[0]), int(coords[1])
-            _click(x, y)
-            return f"Clicked at ({x},{y})"
-
-        elif cmd == "type":
-            if not arg:
-                return "Error: type requires text. Usage: type Hello world"
-            _type_text(arg)
-            return f"Typed: {arg[:50]}{'...' if len(arg) > 50 else ''}"
-
-        elif cmd == "hotkey":
-            if not arg:
-                return "Error: hotkey requires keys. Usage: hotkey cmd space"
-            keys = arg.split()
-            _hotkey(*keys)
-            return f"Pressed hotkey: {' + '.join(keys)}"
-
-        elif cmd == "find":
-            if not arg:
-                return "Error: find requires target text."
-            result = _capture_and_locate(arg)
-            if isinstance(result, str):
-                return result
-            target, alt_info = result
-            return f'Found "{target["text"]}" at ({target["x"]},{target["y"]}).{alt_info}'
-
-        elif cmd == "wait":
-            secs = float(arg) if arg else 1.0
-            secs = min(secs, 10.0)
-            time.sleep(secs)
-            return f"Waited {secs}s"
-
-        else:
-            return f"Unknown action: {cmd}. Available: screenshot, click, double_click, click_xy, type, hotkey, find, wait"
-
+        return handler(arg)
     except ImportError as e:
         pkg = str(e).split("'")[-2] if "'" in str(e) else str(e)
         return f"Missing dependency: {pkg}. Install with: pip install mss pynput rapidocr-onnxruntime"

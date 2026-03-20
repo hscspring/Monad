@@ -6,7 +6,8 @@
     <a href="README_zh.md">🇨🇳 简体中文 (Chinese)</a> •
     <a href="#-how-it-works">How It Works</a> •
     <a href="#-installation">Installation</a> •
-    <a href="#-architecture">Architecture</a>
+    <a href="DESIGN.md">Design Philosophy</a> •
+    <a href="FUTURE.md">Roadmap</a>
   </p>
   
   <p>
@@ -96,8 +97,9 @@ Beyond the 5 core instincts, MONAD ships with a set of ready-to-use skills:
 | `parse_document` | Parse and extract structured content from documents (PDF, Word, etc.). |
 | `web_to_markdown` | Convert any web page to clean Markdown. |
 | `markdown_to_knowledge_map` | Convert Markdown/text/URL into a visual knowledge graph (SVG/PNG) via Mermaid. |
+| `markdown_to_pdf` | Convert Markdown text or `.md` files to well-formatted PDF with CJK support. |
 
-> Skills are Python modules (`executor.py` + `skill.yaml`). MONAD can also auto-generate new skills from any successful task.
+> Skills are Python modules (`executor.py` + `skill.yaml`). MONAD can also auto-generate new skills from any successful task. Skills can declare **composite sequences** — chaining existing skills via YAML without writing code.
 
 ---
 
@@ -119,6 +121,20 @@ MONAD intentionally discards traditional "Chat History" in favor of a **Stateles
 *   **Physical Memory:** Unlike black-box model caches, MONAD's memory consists of human-readable Markdown files. This is a deliberate step towards **Personal Data Sovereignty**.
 *   **Task Atomicity:** Every objective becomes an independent, reproducible unit of execution.
 *   **The Future of Agents:** We believe the evolution of Agents will shift from "simulating conversation" to "simulating rational execution." Maintaining a living **"State Whiteboard"** via reflection loops is far more aligned with the essence of AGI than endlessly stacking chat logs.
+
+### 🔗 TaskState: The State Monad
+
+In multi-step tasks, data traditionally flows through the LLM's text context — getting truncated and lossy at every step. MONAD solves this with **TaskState**, a shared dict that stores every action's full, untruncated result:
+
+```
+step_1: web_fetch → 48KB page content stored in task_state
+step_2: python_exec → reads task_state["step_1_web_fetch"] directly (full 48KB)
+```
+
+The LLM sees only keys and sizes, then generates code that reads the full data via `task_state["key"]`. This is `s → (a, s')` — every action transforms the state, and the state is the thread connecting all steps.
+
+> For the complete design philosophy, architecture decisions, and trade-offs, see **[DESIGN.md](DESIGN.md)**.
+> For the roadmap and future directions, see **[FUTURE.md](FUTURE.md)**.
 
 ---
 
@@ -181,7 +197,7 @@ monad --test
 ```
 
 ### Unit Tests
-Run the test suite for all tools:
+Run the full test suite (341 tests):
 ```bash
 python -m pytest tests/ -v
 ```

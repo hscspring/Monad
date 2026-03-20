@@ -11,9 +11,12 @@ Four modes:
 
 import traceback
 
-# Minimum meaningful content length (chars). Below this, page is likely
-# a JS shell, Cloudflare challenge, or empty skeleton.
-MIN_CONTENT_LEN = 200
+from monad.config import (
+    MIN_CONTENT_LEN, CHALLENGE_CONTENT_THRESHOLD,
+    CHALLENGE_MARKERS, DEFAULT_USER_AGENT, TRUNCATE_CONTENT, truncate,
+)
+
+_VALID_MODES = ("auto", "fast", "stealth", "browser")
 
 
 def run(url: str = "", mode: str = "auto", selector: str = "",
@@ -21,7 +24,6 @@ def run(url: str = "", mode: str = "auto", selector: str = "",
     """Fetch web page content with automatic mode selection.
 
     This is MONAD's internet perception capability (eyes).
-    Use this to directly see what's on a web page.
 
     Args:
         url: Target URL to fetch
@@ -37,13 +39,12 @@ def run(url: str = "", mode: str = "auto", selector: str = "",
         return "Error: No URL provided."
 
     mode = mode.lower().strip()
-    if mode not in ("auto", "fast", "stealth", "browser"):
-        return f"Error: Invalid mode '{mode}'. Use 'auto', 'fast', 'stealth', or 'browser'."
+    if mode not in _VALID_MODES:
+        return f"Error: Invalid mode '{mode}'. Use: {', '.join(_VALID_MODES)}."
 
     if mode == "auto":
         return _auto_fetch(url, selector, wait_selector, timeout)
 
-    # Explicit mode — run exactly what user asked
     try:
         if mode == "fast":
             return _fetch_fast(url, selector, timeout)
@@ -59,42 +60,23 @@ def run(url: str = "", mode: str = "auto", selector: str = "",
 
 
 def _auto_fetch(url: str, selector: str, wait_selector: str, timeout: int) -> str:
-    """Smart auto-fallback: fast → stealth → browser.
-
-    Each mode is tried in order. If a mode fails or returns too little
-    content (likely a JS shell / Cloudflare challenge), the next mode
-    is attempted automatically.
-    """
+    """Smart auto-fallback: fast → stealth → browser."""
     errors = []
 
-    # --- Stage 1: fast (HTTP) ---
-    try:
-        result = _fetch_fast(url, selector, timeout)
-        if _is_good_content(result):
-            return result
-        errors.append(f"fast: content too short ({len(result.strip())} chars), likely JS-rendered page")
-    except Exception as e:
-        errors.append(f"fast: {_short_error(e)}")
+    for mode_name, fetcher in (
+        ("fast", lambda: _fetch_fast(url, selector, timeout)),
+        ("stealth", lambda: _fetch_stealth(url, selector, timeout)),
+        ("browser", lambda: _fetch_browser(url, selector, wait_selector, timeout)),
+    ):
+        try:
+            result = fetcher()
+            if _is_good_content(result):
+                prefix = f"[mode: {mode_name}]\n" if mode_name != "fast" else ""
+                return f"{prefix}{result}"
+            errors.append(f"{mode_name}: content too short ({len(result.strip())} chars)")
+        except Exception as e:
+            errors.append(f"{mode_name}: {_short_error(e)}")
 
-    # --- Stage 2: stealth (anti-bot headless) ---
-    try:
-        result = _fetch_stealth(url, selector, timeout)
-        if _is_good_content(result):
-            return f"[mode: stealth]\n{result}"
-        errors.append(f"stealth: content too short ({len(result.strip())} chars)")
-    except Exception as e:
-        errors.append(f"stealth: {_short_error(e)}")
-
-    # --- Stage 3: browser (full Chromium + JS) ---
-    try:
-        result = _fetch_browser(url, selector, wait_selector, timeout)
-        if _is_good_content(result):
-            return f"[mode: browser]\n{result}"
-        errors.append(f"browser: content too short ({len(result.strip())} chars)")
-    except Exception as e:
-        errors.append(f"browser: {_short_error(e)}")
-
-    # All modes failed — if a selector was specified, retry without it
     if selector:
         retry_result = _auto_fetch(url, "", wait_selector, timeout)
         if _is_good_content(retry_result):
@@ -114,9 +96,6 @@ def _fetch_fast(url: str, selector: str, timeout: int) -> str:
         from scrapling.fetchers import Fetcher
         page = Fetcher.get(url, stealthy_headers=True, timeout=timeout)
     except Exception:
-        # Fallback: requests + Scrapling parser (Adaptor)
-        # Catches ImportError (curl_cffi missing) AND runtime errors
-        # (e.g. curl_cffi TLS handshake failures)
         page = _requests_fetch(url, timeout)
 
     return _extract_content(page, selector)
@@ -125,23 +104,17 @@ def _fetch_fast(url: str, selector: str, timeout: int) -> str:
 def _fetch_stealth(url: str, selector: str, timeout: int) -> str:
     """Stealth fetch — headless browser with anti-bot bypass."""
     from scrapling.fetchers import StealthyFetcher
-
     page = StealthyFetcher.fetch(url, headless=True, timeout=timeout * 1000)
     return _extract_content(page, selector)
 
 
 def _fetch_browser(url: str, selector: str, wait_selector: str, timeout: int) -> str:
-    """Full browser rendering via system Chrome (no separate chromium install needed)."""
+    """Full browser rendering via system Chrome."""
     from scrapling.fetchers import DynamicFetcher
-
-    fetch_kwargs = {
-        "headless": True,
-        "real_chrome": True,
-        "timeout": timeout * 1000,  # Playwright uses ms
-        "network_idle": True,
-    }
-
-    page = DynamicFetcher.fetch(url, **fetch_kwargs)
+    page = DynamicFetcher.fetch(
+        url, headless=True, real_chrome=True,
+        timeout=timeout * 1000, network_idle=True,
+    )
     return _extract_content(page, selector)
 
 
@@ -151,11 +124,7 @@ def _requests_fetch(url: str, timeout: int):
     from scrapling.parser import Adaptor
 
     headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/131.0.0.0 Safari/537.36"
-        ),
+        "User-Agent": DEFAULT_USER_AGENT,
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
         "Accept-Encoding": "gzip, deflate, br",
@@ -177,7 +146,6 @@ def _extract_content(page, selector: str) -> str:
         texts = [el.text.strip() for el in elements if el.text and el.text.strip()]
         return "\n".join(texts) if texts else "(elements found but no text content)"
 
-    # Return full page text, truncated to avoid overwhelming LLM
     try:
         text = page.get_all_text(ignore_tags=("script", "style", "noscript"))
     except (AttributeError, TypeError):
@@ -187,10 +155,9 @@ def _extract_content(page, selector: str) -> str:
         try:
             text = page.body.text if page.body else ""
         except (AttributeError, TypeError):
-            # Last resort: get raw text
             text = page.text if hasattr(page, "text") else ""
 
-    return _truncate(text, 5000)
+    return _truncate_page(text)
 
 
 def _is_good_content(text: str) -> bool:
@@ -198,17 +165,9 @@ def _is_good_content(text: str) -> bool:
     clean = text.strip()
     if not clean or len(clean) < MIN_CONTENT_LEN:
         return False
-    # Detect common challenge / empty page patterns
-    challenge_markers = [
-        "please solve the challenge",
-        "checking your browser",
-        "just a moment",
-        "enable javascript",
-        "you need to enable javascript",
-    ]
     lower = clean.lower()
-    for marker in challenge_markers:
-        if marker in lower and len(clean) < 500:
+    for marker in CHALLENGE_MARKERS:
+        if marker in lower and len(clean) < CHALLENGE_CONTENT_THRESHOLD:
             return False
     return True
 
@@ -224,8 +183,8 @@ def _safe_title(page) -> str:
     return "(unknown)"
 
 
-def _truncate(text: str, max_len: int = 5000) -> str:
-    """Truncate text to max_len with notice."""
+def _truncate_page(text: str, max_len: int = TRUNCATE_CONTENT) -> str:
+    """Truncate page text with notice."""
     text = text.strip()
     if not text:
         return "(page loaded but no text content extracted)"
@@ -246,9 +205,7 @@ def _import_error_msg(mode: str, e: Exception) -> str:
 
 def _short_error(e: Exception) -> str:
     """Get a concise error description."""
-    msg = str(e)
-    if len(msg) > 120:
-        msg = msg[:120] + "..."
+    msg = truncate(str(e), 120)
     return f"{type(e).__name__}: {msg}"
 
 

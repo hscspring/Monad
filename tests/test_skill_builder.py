@@ -48,6 +48,43 @@ class TestBuildPrompt:
         prompt = builder._build_prompt({"goal": "x"}, {"steps": []}, "")
         assert "No existing skills" in prompt
 
+    def test_includes_detailed_trace(self, builder):
+        prompt = builder._build_prompt(
+            {"goal": "demo"},
+            {
+                "steps": [{"action": "web_fetch", "description": "x"}],
+                "actions_full": [
+                    {"capability": "web_fetch", "params": {"url": "https://example.com"}}
+                ],
+                "step_results_full": [
+                    {"capability": "web_fetch", "result": "<html>ok</html>", "success": True}
+                ],
+            },
+            "",
+        )
+        assert "Detailed execution trace" in prompt
+        assert "https://example.com" in prompt
+        assert "<html>ok</html>" in prompt
+
+
+# ---------------------------------------------------------------------------
+# Smoke run
+# ---------------------------------------------------------------------------
+
+class TestSmokeRun:
+
+    def test_smoke_passes_minimal_skill(self):
+        ok, msg = SkillBuilder._smoke_run_skill_code(
+            "def run(**kwargs):\n    return 'ok'", []
+        )
+        assert ok and msg == ""
+
+    def test_smoke_fails_when_run_raises(self):
+        ok, msg = SkillBuilder._smoke_run_skill_code(
+            "def run(**kwargs):\n    raise ValueError('nope')", []
+        )
+        assert not ok and "nope" in msg
+
 
 # ---------------------------------------------------------------------------
 # evaluate_and_build
@@ -155,6 +192,55 @@ class TestEvaluateAndBuild:
             {"goal": "test"}, {"success": True, "steps": []})
         assert result is None
 
+    @patch("monad.learning.skill_builder.llm_call")
+    def test_create_blocked_by_smoke(self, mock_llm, builder):
+        mock_llm.side_effect = [
+            json.dumps(
+                {
+                    "action": "create",
+                    "reason": "new",
+                    "skill": {
+                        "name": "smoke_fail",
+                        "goal": "g",
+                        "inputs": [],
+                        "steps": ["s"],
+                        "code": "def run(**kwargs):\n    raise RuntimeError('bad')",
+                    },
+                }
+            ),
+            '{"pass": true, "reason": ""}',
+        ]
+        result = builder.evaluate_and_build(
+            {"goal": "x"}, {"success": True, "steps": []})
+        assert result is None
+
+    @patch("monad.learning.skill_builder.llm_call")
+    def test_create_composition_only_no_second_llm(self, mock_llm, builder):
+        mock_llm.return_value = json.dumps(
+            {
+                "action": "create",
+                "reason": "pipeline",
+                "skill": {
+                    "name": "combo_skill",
+                    "goal": "chain",
+                    "inputs": ["q"],
+                    "steps": ["a", "b"],
+                    "code": "",
+                    "composition": {"sequence": ["other_a", "other_b"]},
+                },
+            }
+        )
+        result = builder.evaluate_and_build(
+            {"goal": "pipe"}, {"success": True, "steps": []})
+        assert result is not None
+        assert result.get("name") == "combo_skill"
+        import yaml
+
+        yaml_path = builder.vault.config.skills_path / "combo_skill" / "skill.yaml"
+        data = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
+        assert data["composition"]["sequence"] == ["other_a", "other_b"]
+        assert mock_llm.call_count == 1
+
 
 # ---------------------------------------------------------------------------
 # _review_code (LLM-based quality gate)
@@ -229,9 +315,84 @@ class TestReviewCode:
 # System prompt
 # ---------------------------------------------------------------------------
 
+class TestDependencyPassing:
+
+    @patch("monad.learning.skill_builder.llm_call")
+    def test_create_saves_dependencies(self, mock_llm, builder):
+        mock_llm.side_effect = [
+            json.dumps({
+                "action": "create", "reason": "new",
+                "skill": {
+                    "name": "dep_skill", "goal": "do stuff",
+                    "inputs": ["x"], "steps": ["s"],
+                    "code": "def run(**kwargs): return 'ok'",
+                    "dependencies": {"python": ["requests>=2.0"], "system": ["ffmpeg"]},
+                }
+            }),
+            '{"pass": true, "reason": ""}'
+        ]
+        result = builder.evaluate_and_build(
+            {"goal": "dep test"}, {"success": True, "steps": []})
+        assert result is not None
+
+        import yaml
+        yaml_path = builder.vault.config.skills_path / "dep_skill" / "skill.yaml"
+        data = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
+        assert data["dependencies"]["python"] == ["requests>=2.0"]
+        assert data["dependencies"]["system"] == ["ffmpeg"]
+
+    @patch("monad.learning.skill_builder.llm_call")
+    def test_update_saves_dependencies(self, mock_llm, builder):
+        builder.vault.save_skill(
+            name="old_skill", goal="Old", inputs=["x"], steps=["s"],
+            code="def run(**kwargs): pass")
+        mock_llm.side_effect = [
+            json.dumps({
+                "action": "update", "target": "old_skill", "reason": "deps",
+                "skill": {
+                    "goal": "New", "inputs": ["x"], "steps": ["s"],
+                    "code": "def run(**kwargs): return 'v2'",
+                    "dependencies": {"python": ["pandas"]},
+                }
+            }),
+            '{"pass": true, "reason": ""}'
+        ]
+        result = builder.evaluate_and_build(
+            {"goal": "update deps"}, {"success": True, "steps": []})
+        assert result is not None
+
+        import yaml
+        yaml_path = builder.vault.config.skills_path / "old_skill" / "skill.yaml"
+        data = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
+        assert data["dependencies"]["python"] == ["pandas"]
+
+    @patch("monad.learning.skill_builder.llm_call")
+    def test_create_without_dependencies(self, mock_llm, builder):
+        mock_llm.side_effect = [
+            json.dumps({
+                "action": "create", "reason": "new",
+                "skill": {
+                    "name": "nodep_skill", "goal": "simple",
+                    "inputs": [], "steps": ["s"],
+                    "code": "def run(**kwargs): return 'ok'",
+                }
+            }),
+            '{"pass": true, "reason": ""}'
+        ]
+        result = builder.evaluate_and_build(
+            {"goal": "no dep"}, {"success": True, "steps": []})
+        assert result is not None
+
+        import yaml
+        yaml_path = builder.vault.config.skills_path / "nodep_skill" / "skill.yaml"
+        data = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
+        assert "dependencies" not in data
+
+
 class TestSystemPrompt:
 
     def test_system_prompt_has_json_formats(self):
         assert '"action": "skip"' in SKILL_BUILDER_SYSTEM
         assert '"action": "create"' in SKILL_BUILDER_SYSTEM
         assert '"action": "update"' in SKILL_BUILDER_SYSTEM
+        assert "composition" in SKILL_BUILDER_SYSTEM

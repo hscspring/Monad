@@ -3,10 +3,10 @@ MONAD Tool: Ask User
 Prompts the user for additional information when parameters are missing.
 """
 
-
 from monad.interface.output import Output
 
 custom_input_handler = None
+
 
 def run(question: str = "", **kwargs) -> str:
     """Ask the user a question and return their response."""
@@ -14,12 +14,11 @@ def run(question: str = "", **kwargs) -> str:
         question = "Could you provide more details?"
 
     Output.system(f"🤔 [MONAD Asks]: {question}")
-    # Emit a special marker so the web frontend can display the question in the chat panel
-    Output._emit(f"[__WS_ASK_USER__]{question}[__WS_ASK_USER_END__]")
-    
+    Output.ask_user_marker(question)
+
     if custom_input_handler:
         return custom_input_handler().strip()
-        
+
     response = input("\n[You] > ")
     return response.strip()
 

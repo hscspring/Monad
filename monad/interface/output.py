@@ -7,15 +7,22 @@ All process steps are printed so the user can see exactly what MONAD is doing.
 from datetime import datetime
 import threading
 
+from monad.config import (
+    VERSION, DIVIDER_WIDTH, CODE_DIVIDER_WIDTH,
+    WS_RESULT_START, WS_RESULT_END,
+    WS_ASK_USER_START, WS_ASK_USER_END,
+    WS_FILE_START, WS_FILE_END,
+)
+
 
 class Output:
     """Handles formatted output for MONAD."""
 
     _local = threading.local()
 
-    BANNER = r"""
+    BANNER = f"""
     ╔══════════════════════════════════════╗
-    ║          M O N A D  v0.3.1           ║
+    ║          M O N A D  v{VERSION:<16s} ║
     ║    Personal AGI Operating Core       ║
     ╚══════════════════════════════════════╝
     """
@@ -29,8 +36,12 @@ class Output:
     def _emit(cls, msg: str):
         """Emit a message to standard output and route to queue if registered."""
         print(msg)
-        if hasattr(cls._local, 'queue') and cls._local.queue is not None:
-            cls._local.queue.put(msg)
+        q = getattr(cls._local, "queue", None)
+        if q is not None:
+            if hasattr(q, "put"):
+                q.put(msg)
+            else:
+                q(msg)
 
     @staticmethod
     def banner():
@@ -61,10 +72,11 @@ class Output:
     @staticmethod
     def code(code_str: str):
         """Print the code MONAD is about to execute."""
-        lines = [f"[MONAD] 📄 执行代码:", f"{'─' * 40}"]
+        divider = "─" * CODE_DIVIDER_WIDTH
+        lines = [f"[MONAD] 📄 执行代码:", divider]
         for line in code_str.strip().split('\n'):
             lines.append(f"  {line}")
-        lines.append(f"{'─' * 40}")
+        lines.append(divider)
         Output._emit("\n".join(lines))
 
     @staticmethod
@@ -85,14 +97,19 @@ class Output:
     @staticmethod
     def result(msg: str):
         """Print the final answer — shown in the chat panel."""
-        Output._emit("[__WS_RESULT_START__]")
+        Output._emit(WS_RESULT_START)
         Output._emit(str(msg))
-        Output._emit("[__WS_RESULT_END__]")
+        Output._emit(WS_RESULT_END)
 
     @staticmethod
     def file_link(filepath: str, url: str):
         """Emit a file-output marker so the frontend shows a download link."""
-        Output._emit(f"[__WS_FILE__]{filepath}|{url}[__WS_FILE_END__]")
+        Output._emit(f"{WS_FILE_START}{filepath}|{url}{WS_FILE_END}")
+
+    @staticmethod
+    def ask_user_marker(question: str):
+        """Emit the ask_user marker for the web frontend."""
+        Output._emit(f"{WS_ASK_USER_START}{question}{WS_ASK_USER_END}")
 
     @staticmethod
     def error(msg: str):
@@ -107,7 +124,7 @@ class Output:
     @staticmethod
     def divider():
         """Print a visual divider."""
-        Output._emit("─" * 50)
+        Output._emit("─" * DIVIDER_WIDTH)
 
     @staticmethod
     def phase(phase_name: str):

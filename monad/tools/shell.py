@@ -5,13 +5,15 @@ Execute shell commands and return output.
 
 import subprocess
 
+from monad.config import TIMEOUT_SHELL
 
-def run(command: str = "", timeout: int = 120, **kwargs) -> str:
+
+def run(command: str = "", timeout: int = TIMEOUT_SHELL, **kwargs) -> str:
     """Execute a shell command and return its output.
 
     Args:
         command: The shell command to execute
-        timeout: Maximum execution time in seconds (default: 120)
+        timeout: Maximum execution time in seconds
     """
     if not command:
         return "Error: No command specified."

@@ -8,25 +8,20 @@ import os
 import sys
 import io
 import traceback
-from pathlib import Path
 
-MONAD_OUTPUT_DIR = Path(os.path.expanduser("~")) / ".monad" / "output"
-MONAD_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+from monad.config import CONFIG
 
 
-def run(code: str = "", **kwargs) -> str:
+def run(code: str = "", _task_state=None, **kwargs) -> str:
     """Execute Python code and return the output.
 
     This is MONAD's core learning capability.
-    Through python_exec, MONAD can:
-    - Call APIs
-    - Process data
-    - Read/write files
-    - Check network
-    - Do anything Python can do
+    Through python_exec, MONAD can do anything Python can do.
 
     Args:
         code: Python code to execute
+        _task_state: Injected by executor — shared state dict for
+            reading prior step results and storing new ones.
 
     Returns:
         stdout output + return value, or error message
@@ -34,7 +29,9 @@ def run(code: str = "", **kwargs) -> str:
     if not code:
         return "Error: No code provided."
 
-    # Capture stdout
+    output_dir = CONFIG.output_path
+    output_dir.mkdir(parents=True, exist_ok=True)
+
     old_stdout = sys.stdout
     old_stderr = sys.stderr
     captured_out = io.StringIO()
@@ -44,17 +41,16 @@ def run(code: str = "", **kwargs) -> str:
         sys.stdout = captured_out
         sys.stderr = captured_err
 
-        # Snapshot output dir before execution
-        before = set(MONAD_OUTPUT_DIR.iterdir()) if MONAD_OUTPUT_DIR.exists() else set()
+        before = set(output_dir.iterdir()) if output_dir.exists() else set()
 
-        # Execute — inject MONAD_OUTPUT_DIR so LLM code can save files there
         exec_globals = {
             "__builtins__": __builtins__,
             "os": os,
             "sys": sys,
-            "MONAD_OUTPUT_DIR": str(MONAD_OUTPUT_DIR),
+            "MONAD_OUTPUT_DIR": str(output_dir),
         }
-        # Lazy-inject MONAD tools so LLM code & skills can call them
+        if _task_state is not None:
+            exec_globals["task_state"] = _task_state
         try:
             from monad.tools.web_fetch import run as _wf
             from monad.tools.shell import run as _sh
@@ -73,8 +69,7 @@ def run(code: str = "", **kwargs) -> str:
         if stderr_val.strip():
             result_parts.append(f"[stderr] {stderr_val.strip()}")
 
-        # Detect new files in output dir (file_link emitted by Executor)
-        after = set(MONAD_OUTPUT_DIR.iterdir()) if MONAD_OUTPUT_DIR.exists() else set()
+        after = set(output_dir.iterdir()) if output_dir.exists() else set()
         new_files = after - before
         if new_files:
             for f in sorted(new_files):

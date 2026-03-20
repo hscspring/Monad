@@ -8,7 +8,8 @@ __pycache__/
 # C extensions
 *.so
 future.md
-design.md
+DESIGN.md
+design_ori.md
 # Distribution / packaging
 .Python
 build/

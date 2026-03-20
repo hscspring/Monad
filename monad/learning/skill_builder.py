@@ -5,10 +5,18 @@ Supports both creating new skills and updating existing ones when overlap is det
 """
 
 import json
-from monad.core.llm import llm_call
-from monad.knowledge.vault import KnowledgeVault
-from monad.interface.output import Output
+import tempfile
+from pathlib import Path
 
+from loguru import logger
+
+from monad.config import truncate
+from monad.core.llm import llm_call
+from monad.interface.output import Output
+from monad.knowledge.vault import KnowledgeVault
+
+_SKILL_PARAM_PREVIEW = 2000
+_SKILL_RESULT_PREVIEW = 4000
 
 SKILL_BUILDER_SYSTEM = """You are MONAD's Skill Builder module.
 Your job is to analyze a completed task and determine:
@@ -34,6 +42,14 @@ Option C — Create a new skill (ONLY when no existing skill is related):
  "skill": {"name": "skill_name_in_snake_case", "goal": "What this skill accomplishes",
             "inputs": ["param1"], "steps": ["step1"], "triggers": ["trigger1"],
             "code": "def run(**kwargs):\\n    # working Python code\\n    pass"}}
+
+Option D — Composite skill (orchestration only, v0.5+): chain existing skills with the same kwargs:
+{"action": "create", "reason": "...",
+ "skill": {"name": "my_pipeline", "goal": "...", "inputs": ["q"], "steps": ["run A then B"],
+            "composition": {"sequence": ["skill_a", "skill_b"]},
+            "code": ""}}
+
+Use composition ONLY when the task is clearly a deterministic pipeline of existing skills; leave code empty and list sub-skills in order.
 
 Rules:
 - ALWAYS prefer "update" over "create" when an existing skill has overlapping functionality.
@@ -74,15 +90,9 @@ class SkillBuilder:
         Output.system("正在调用 LLM 评估是否生成新技能...")
         try:
             response = llm_call(prompt, system=SKILL_BUILDER_SYSTEM, temperature=0.2)
-
-            cleaned = response.strip()
-            if cleaned.startswith("```"):
-                lines = cleaned.split("\n")
-                lines = [l for l in lines if not l.strip().startswith("```")]
-                cleaned = "\n".join(lines)
-
-            result = json.loads(cleaned)
+            result = _parse_json_response(response)
         except Exception as e:
+            logger.warning(f"Skill evaluation failed: {e}")
             Output.warn(f"技能评估失败: {str(e)}")
             return None
 
@@ -92,10 +102,8 @@ class SkillBuilder:
         if action == "skip":
             Output.system(f"评估结果: 不需要生成新技能 ({reason})")
             return None
-
         if action == "update":
             return self._handle_update(result)
-
         if action == "create":
             return self._handle_create(result)
 
@@ -112,49 +120,54 @@ class SkillBuilder:
             Output.warn("评估要求更新技能但未指定目标，跳过")
             return None
 
-        code = skill.get("code", "")
-        if not code or "def run" not in code:
-            Output.warn("技能代码缺少 run() 函数，跳过更新")
-            return None
-
-        passed, review = self._review_code(code, skill.get("goal", ""))
-        if not passed:
-            Output.warn(f"技能代码质量不过关，跳过更新: {review}")
+        code = skill.get("code", "") or ""
+        if not self._validate_skill_code(code, skill):
             return None
 
         Output.learning(f"正在更新已有技能: {target} ({reason})")
-        self.vault.save_skill(
-            name=target,
-            goal=skill.get("goal", ""),
-            inputs=skill.get("inputs", []),
-            steps=skill.get("steps", []),
-            code=code,
-            triggers=skill.get("triggers"),
-        )
+        self._save_skill_from_dict(target, skill, code)
         Output.learning(f"♻️ 技能已更新: {target}")
         return {"name": target, "updated": True, **skill}
 
     def _handle_create(self, result: dict) -> dict | None:
         """Create a brand-new skill."""
         skill = result.get("skill", {})
-        reason = result.get("reason", "")
         name = skill.get("name", "")
 
         if not name:
             Output.warn("评估结果缺少技能名称，跳过")
             return None
 
-        code = skill.get("code", "")
-        if not code or "def run" not in code:
-            Output.warn("技能代码缺少 run() 函数，跳过创建")
-            return None
-
-        passed, review = self._review_code(code, skill.get("goal", ""))
-        if not passed:
-            Output.warn(f"技能代码质量不过关，跳过创建: {review}")
+        code = skill.get("code", "") or ""
+        if not self._validate_skill_code(code, skill):
             return None
 
         Output.learning(f"正在保存新技能: {name}...")
+        self._save_skill_from_dict(name, skill, code)
+        Output.learning(f"🌱 新技能已创建: {name} — {skill.get('goal', '')}")
+        return skill
+
+    def _validate_skill_code(self, code: str, skill: dict) -> bool:
+        """Review + smoke-test code, or verify composition. Returns True if valid."""
+        composition = skill.get("composition")
+        if code and "def run" in code:
+            passed, review = self._review_code(code, skill.get("goal", ""))
+            if not passed:
+                Output.warn(f"技能代码质量不过关: {review}")
+                return False
+            ok, smoke = self._smoke_run_skill_code(code, skill.get("inputs", []))
+            if not ok:
+                Output.warn(f"技能代码未通过执行烟测: {smoke}")
+                return False
+            return True
+        if composition:
+            Output.system("组合技能 (composition)：跳过代码审阅与烟测")
+            return True
+        Output.warn("技能代码缺少 run() 且无 composition，跳过")
+        return False
+
+    def _save_skill_from_dict(self, name: str, skill: dict, code: str) -> None:
+        """Persist a skill to vault from the LLM response dict."""
         self.vault.save_skill(
             name=name,
             goal=skill.get("goal", ""),
@@ -162,16 +175,15 @@ class SkillBuilder:
             steps=skill.get("steps", []),
             code=code,
             triggers=skill.get("triggers"),
+            dependencies=skill.get("dependencies"),
+            composition=skill.get("composition"),
         )
-        Output.learning(f"🌱 新技能已创建: {name} — {skill.get('goal', '')}")
-        return skill
 
     @staticmethod
     def _review_code(code: str, goal: str) -> tuple[bool, str]:
         """Use LLM to review generated skill code quality.
 
-        Returns (passed, reason). Fail-open: if LLM call errors out,
-        we allow the skill through to avoid blocking on transient failures.
+        Returns (passed, reason). Fail-open on LLM errors.
         """
         prompt = f"""Review this auto-generated skill code for quality issues.
 
@@ -194,31 +206,89 @@ Return JSON only:
 
         try:
             response = llm_call(prompt, system="You are a code reviewer. Return valid JSON only.", temperature=0)
-            cleaned = response.strip()
-            if cleaned.startswith("```"):
-                lines = cleaned.split("\n")
-                lines = [l for l in lines if not l.strip().startswith("```")]
-                cleaned = "\n".join(lines)
-            result = json.loads(cleaned)
+            result = _parse_json_response(response)
             return result.get("pass", True), result.get("reason", "")
         except Exception:
             return True, ""
 
-    def _build_prompt(self, objective: dict, execution_result: dict,
+    @staticmethod
+    def _smoke_run_skill_code(code: str, inputs: list) -> tuple[bool, str]:
+        """Execute skill code in an isolated namespace with stub tools (smoke test)."""
+        tmp = Path(tempfile.mkdtemp(prefix="monad_skill_smoke_"))
+        ns: dict = {
+            "__builtins__": __builtins__,
+            "MONAD_OUTPUT_DIR": str(tmp),
+        }
+
+        def _stub(**_kwargs) -> str:
+            return "[stub_ok]"
+
+        ns["web_fetch"] = _stub
+        ns["shell"] = _stub
+        ns["python_exec"] = _stub
+        ns["ask_user"] = _stub
+        ns["desktop_control"] = _stub
+        ns["task_state"] = {}
+
+        try:
+            exec(compile(code, "<skill_smoke>", "exec"), ns, ns)
+            run_fn = ns.get("run")
+            if not callable(run_fn):
+                return False, "no callable run() after exec"
+            kwargs = {}
+            for inp in inputs or []:
+                key = str(inp)
+                lk = key.lower()
+                if "url" in lk or "link" in lk or "endpoint" in lk:
+                    kwargs[key] = "https://example.com"
+                else:
+                    kwargs[key] = ""
+            run_fn(**kwargs)
+        except Exception as e:
+            return False, f"{type(e).__name__}: {e}"
+        return True, ""
+
+    @staticmethod
+    def _build_prompt(objective: dict, execution_result: dict,
                       existing_skills: str) -> str:
         """Build skill evaluation prompt including existing skills for dedup."""
         goal = objective.get("goal", "Unknown")
         steps = execution_result.get("steps", [])
+        actions_full = execution_result.get("actions_full") or []
+        step_results_full = execution_result.get("step_results_full") or []
 
         step_details = []
         for s in steps:
             step_details.append(f"  {s.get('action')}({s.get('description', '')})")
 
+        trace_lines: list[str] = []
+        for i, act in enumerate(actions_full):
+            cap = act.get("capability", "")
+            params = act.get("params", {})
+            try:
+                param_preview = json.dumps(params, ensure_ascii=False)[:_SKILL_PARAM_PREVIEW]
+            except (TypeError, ValueError):
+                param_preview = truncate(str(params), _SKILL_PARAM_PREVIEW)
+            sr = step_results_full[i] if i < len(step_results_full) else {}
+            res_text = sr.get("result", "") if isinstance(sr, dict) else ""
+            res_preview = truncate(str(res_text), _SKILL_RESULT_PREVIEW)
+            ok = sr.get("success", True) if isinstance(sr, dict) else True
+            trace_lines.append(
+                f"--- Step {i + 1} | [{cap}] | success={ok} ---\n"
+                f"Params: {param_preview}\n"
+                f"Result (preview): {res_preview}\n"
+            )
+
         parts = [
             f"Task completed successfully.\n",
             f"Goal: {goal}",
-            f"Steps executed:\n" + "\n".join(step_details),
+            f"Steps summary (may be truncated):\n" + "\n".join(step_details),
         ]
+        if trace_lines:
+            parts.append(
+                "\nDetailed execution trace (use this to write accurate skill code):\n"
+                + "\n".join(trace_lines)
+            )
 
         if existing_skills:
             parts.append(f"\n--- Existing Skills (check for overlap!) ---\n{existing_skills}")
@@ -230,3 +300,13 @@ Return JSON only:
             "PREFER updating if any existing skill is related."
         )
         return "\n".join(parts)
+
+
+def _parse_json_response(response: str) -> dict:
+    """Parse JSON from LLM response, stripping markdown fences."""
+    cleaned = response.strip()
+    if cleaned.startswith("```"):
+        lines = cleaned.split("\n")
+        lines = [l for l in lines if not l.strip().startswith("```")]
+        cleaned = "\n".join(lines)
+    return json.loads(cleaned)

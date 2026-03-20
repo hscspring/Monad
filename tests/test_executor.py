@@ -88,3 +88,136 @@ class TestSkillExecution:
     def test_missing_skill(self, executor):
         result = executor.execute("totally_nonexistent_skill_xyz")
         assert "Unknown capability" in result
+
+    def test_composite_skill_sequence(self, executor, tmp_path, monkeypatch):
+        root = tmp_path / "knowledge" / "skills"
+
+        for name, ret in [
+            ("leaf_a", "return 'A' + kwargs.get('x', '')"),
+            ("leaf_b", "return 'B'"),
+        ]:
+            d = root / name
+            d.mkdir(parents=True)
+            (d / "skill.yaml").write_text(
+                yaml.dump({"name": name, "goal": "g", "inputs": [], "steps": []}),
+                encoding="utf-8",
+            )
+            (d / "executor.py").write_text(f"def run(**kwargs):\n    {ret}\n", encoding="utf-8")
+
+        pipe = root / "pipe"
+        pipe.mkdir(parents=True)
+        (pipe / "skill.yaml").write_text(
+            yaml.dump(
+                {
+                    "name": "pipe",
+                    "goal": "pipeline",
+                    "inputs": [],
+                    "steps": [],
+                    "composition": {"sequence": ["leaf_a", "leaf_b"]},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        from monad.config import CONFIG
+
+        monkeypatch.setattr(CONFIG, "root_dir", tmp_path)
+        result = executor.execute("pipe", x="!")
+        assert "composition: pipe → leaf_a" in result
+        assert "A!" in result
+        assert "composition: pipe → leaf_b" in result
+        assert "B" in result
+
+
+class TestTaskStatePropagation:
+
+    def test_python_exec_receives_task_state(self, executor):
+        from monad.execution.context import TaskState
+        ts = TaskState()
+        ts["prior_data"] = "hello from prior step"
+        result = executor.execute(
+            "python_exec", task_state=ts,
+            code='print(task_state["prior_data"])')
+        assert "hello from prior step" in result
+
+    def test_python_exec_can_write_task_state(self, executor):
+        from monad.execution.context import TaskState
+        ts = TaskState()
+        executor.execute(
+            "python_exec", task_state=ts,
+            code='task_state["computed"] = "42"')
+        assert ts["computed"] == "42"
+
+    def test_python_exec_without_task_state(self, executor):
+        result = executor.execute("python_exec", code='print("no state")')
+        assert "no state" in result
+
+    def test_skill_receives_task_state(self, executor, tmp_path, monkeypatch):
+        from monad.execution.context import TaskState
+        skill_dir = tmp_path / "knowledge" / "skills" / "state_check"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "skill.yaml").write_text(
+            "name: state_check\ngoal: check\ninputs: []\nsteps: [check]\n",
+            encoding="utf-8")
+        (skill_dir / "executor.py").write_text(
+            "def run(**kwargs):\n    return f'got={task_state[\"key\"]}'",
+            encoding="utf-8")
+
+        from monad.config import CONFIG
+        monkeypatch.setattr(CONFIG, "root_dir", tmp_path)
+        ts = TaskState()
+        ts["key"] = "value_from_state"
+        result = executor.execute("state_check", task_state=ts)
+        assert "got=value_from_state" in result
+
+
+class TestGetSkillTeardown:
+
+    def test_returns_teardown_name(self, executor, tmp_path, monkeypatch):
+        skill_dir = tmp_path / "knowledge" / "skills" / "with_teardown"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "skill.yaml").write_text(
+            yaml.dump({"name": "with_teardown", "goal": "g", "inputs": [], "steps": [],
+                        "teardown": "cleanup_skill"}),
+            encoding="utf-8",
+        )
+        from monad.config import CONFIG
+        monkeypatch.setattr(CONFIG, "root_dir", tmp_path)
+        assert executor.get_skill_teardown("with_teardown") == "cleanup_skill"
+
+    def test_returns_none_when_no_teardown(self, executor, tmp_path, monkeypatch):
+        skill_dir = tmp_path / "knowledge" / "skills" / "no_teardown"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "skill.yaml").write_text(
+            yaml.dump({"name": "no_teardown", "goal": "g", "inputs": [], "steps": []}),
+            encoding="utf-8",
+        )
+        from monad.config import CONFIG
+        monkeypatch.setattr(CONFIG, "root_dir", tmp_path)
+        assert executor.get_skill_teardown("no_teardown") is None
+
+    def test_returns_none_for_missing_skill(self, executor):
+        assert executor.get_skill_teardown("nonexistent_xyz") is None
+
+
+class TestEnsureSkillDeps:
+
+    def test_missing_deps_triggers_pip(self, executor, tmp_path, monkeypatch):
+        skill_dir = tmp_path / "knowledge" / "skills" / "dep_test"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "skill.yaml").write_text(
+            yaml.dump({"name": "dep_test", "goal": "g", "inputs": [], "steps": [],
+                        "dependencies": {"python": ["a_totally_fake_pkg_xyzzy"]}}),
+            encoding="utf-8",
+        )
+        from unittest.mock import patch
+        with patch("subprocess.run") as mock_run:
+            executor._ensure_skill_deps(skill_dir)
+            mock_run.assert_called_once()
+            args = mock_run.call_args
+            assert "a_totally_fake_pkg_xyzzy" in args[0][0]
+
+    def test_no_yaml_does_nothing(self, executor, tmp_path):
+        skill_dir = tmp_path / "empty_skill"
+        skill_dir.mkdir(parents=True)
+        executor._ensure_skill_deps(skill_dir)

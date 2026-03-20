@@ -2,7 +2,39 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [0.5.0] - 2026-03-19
+
+### Added
+- **`monad.cognition.planning`**: New module — balanced-bracket JSON array extraction (`extract_json_array`) for robust task decomposition; semantic alignment of planned vs actual capabilities (`action_satisfies_planned_capability`), e.g. `python_exec` with `requests` satisfies a `web_fetch` plan step; `code_suggests_http_fetch` heuristic; centralized `BASIC_CAPABILITIES` constant.
+- **`monad.cognition.parser`**: Extracted from `reasoner.py` — all LLM response parsing logic (`parse_response`, `clean_llm_output`, `parse_tags`, truncated JSON repair, `[TOOL_CALL]` format handling) now lives in a dedicated, testable module.
+- **`monad.cognition.prompts`**: Extracted from `reasoner.py` — all system prompt templates (`build_reasoner_system`, `PLAN_SYSTEM`, `COMPLETION_CHECK_SYSTEM`) with platform-aware runtime injection.
+- **`monad.cognition.hints`**: Extracted from `reasoner.py` — post-action contextual hints (`action_hint`) for shell and desktop_control actions.
+- **`monad.execution.context`**: **TaskState** — a shared `dict` subclass that lives for one `solve()` invocation. Every action's full, untruncated result is stored as `step_{n}_{capability}`. LLM sees only keys + sizes; generated code accesses full data via `task_state["key"]`. Implements the state monad: `s → (a, s')`.
+- **`monad.types`**: `ToolFn` protocol for typed tool function signatures.
+- **SkillBuilder**: Rich execution trace in prompts (`actions_full` / `step_results_full` from the loop); post-review **smoke execution** (`_smoke_run_skill_code`) of generated `run()` with stubbed tools; optional **`composition.sequence`** in `skill.yaml` for composite skills (Option D in skill evaluation).
+- **Executor**: Runs `composition.sequence` as ordered sub-skill invocations (same kwargs, max 16 depth).
+- **Vault**: `save_skill` now accepts optional `composition` dict for composite skill definitions.
+- **Tests**: 341 total (up from ~250). New `tests/test_planning.py`, `tests/test_output.py`, `tests/test_web.py`, `tests/test_context.py`; expanded `test_config.py`, `test_executor.py` (composite skills, deps, teardown), `test_skill_builder.py` (smoke run, composition, detailed trace), `test_reasoner.py` (semantic plan matching).
+
+### Changed
+- **Config: zero import side-effects**: `monad.config` no longer touches the filesystem on import. All I/O (directory creation, knowledge sync, `.env` loading, loguru setup) moved to explicit `init_workspace()`, called from CLI/web/Feishu entry points. `LLMConfig` uses `default_factory` for env-backed fields. All magic numbers extracted to named constants (`TRUNCATE_*`, `TIMEOUT_*`, `MAX_*`, etc.).
+- **Config: web server settings**: New `WEB_HOST`, `WEB_PORT`, `WEB_MAX_UPLOAD_BYTES` env overrides with sane defaults.
+- **Reasoner: modular architecture**: Monolithic `reasoner.py` (~1500 lines) split into `reasoner.py` (loop + orchestration) + `parser.py` + `prompts.py` + `hints.py` + `planning.py`. Each module is independently testable.
+- **Reasoner: semantic plan matching**: `_update_plan(capability, params)` uses `action_satisfies_planned_capability` for fuzzy alignment. `_reconcile_plan_from_actions` resets and replays all actions before answer validation. Plan-based completion uses LLM only when steps remain after reconciliation. Completion prompt includes `[PLAN]` context and equivalence rules.
+- **Reasoner: robust plan parsing**: `_decompose_task` now uses `parse_plan_steps` (bracket-matching) instead of brittle `find("[")` / `rfind("]")`.
+- **Web interface: async logging**: Replaced busy-polling `queue.Queue` with `asyncio.Queue` managed via FastAPI `lifespan`. WebSocket log endpoint now `await`s properly. Upload endpoint enforces size limits and uses `_sanitize_upload_filename` to prevent path traversal.
+- **Output: callable sink**: `Output._emit` supports both `queue.Queue` and callable functions as log sinks, enabling the async bridge.
+- **Loop: richer learning context**: `_process` now passes `actions_full` and `step_results_full` to Reflection and SkillBuilder for higher-quality skill extraction.
+- **Reflection**: Uses centralized `clean_llm_output` from `parser.py` instead of a local duplicate.
+- **SkillBuilder: deduplicated handlers**: `_handle_update` and `_handle_create` share `_validate_skill_code` and `_save_skill_from_dict` helpers. Code review + smoke test gate blocks saving of broken skills.
+- **Executor**: Uses `CONFIG.skill_dir()` helper and `ToolFn` type annotations.
+
+### Fixed
+- **Plan steps never marked done** when LLM used a different but functionally equivalent capability (e.g. `python_exec` with `requests` for a `web_fetch` plan step).
+- **Task decomposition JSON parse failures** on LLM output containing markdown fences or mixed text around the JSON array.
+- **Completion check contradicting plan-based check** — reconciliation now ensures consistency before invoking the LLM fallback.
+- **Duplicate `clean_llm_output`** in `reflection.py` — consolidated into `parser.py`.
+- **Duplicate `_BASIC_CAPABILITIES`** constants in `reasoner.py` and `planning.py` — unified into `planning.BASIC_CAPABILITIES`.
 
 ## [0.4.1] - 2026-03-18
 

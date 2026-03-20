@@ -16,9 +16,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **URL-First Principle**: When the user provides a specific URL, MONAD must access it directly first, not search for it. Search engines are a fallback.
 - **LLM as Command Executor**: LLM training data is disregarded. All factual information must be retrieved from real world via code execution or web perception.
 - **Experience Staging & Hygiene**: New experiences land in `pending.jsonl` first. Only when the same tag pattern recurs ≥3 times is the best example promoted to `accumulated_experiences.md`. Failed experiences are tagged `[FAILED]` and never promoted.
-- **Tag-Based Experience Retrieval**: Experiences scored by `relevance × 2 + recency` (keyword overlap + timestamp). Top entries selected plus 3 most recent as fallback. No vector DB.
+- **Tag-Based Experience Retrieval**: Experiences scored by `relevance × 2 + recency` (jieba-segmented keyword overlap + timestamp). Top entries selected plus 3 most recent as fallback. No vector DB.
 - **Anti-Hallucination Verification**: Post-action verification checks filesystem after skill creation actions. LLM-based completion check validates all subtasks are done before accepting an answer.
 - **Skill Deduplication (Reuse First)**: System prompt instructs LLM to check existing skills before creating new ones. SkillBuilder supports `skip`/`update`/`create` actions, preferring `update`.
+- **Skill Teardown**: Skills can declare a `teardown` field in `skill.yaml` naming another skill to run on task failure (e.g. `start_recording` → `stop_recording`). The core loop auto-runs teardowns when a task fails, preventing resource leaks like orphaned ffmpeg processes.
+- **LLM Retry on Transient Failures**: `llm_call()` retries up to 3 times with exponential backoff (2s→4s→8s) on 5xx, timeout, and connection errors. The reasoner loop also tolerates up to 3 consecutive LLM failures before aborting, consuming a turn instead of killing the task.
 
 ### Basic Capabilities (5 "Instincts")
 
@@ -67,6 +69,8 @@ APP_ID=xxx APP_SECRET=yyy monad --feishu
 - Workspace: `~/.monad/`
 - Config: `~/.monad/.env` (created on first run with interactive setup)
 - LLM settings: `MONAD_BASE_URL`, `MONAD_API_KEY`, `MODEL_ID`
+- Startup: `init_workspace()` in `monad.config` is called from CLI/web/Feishu entry points (creates dirs, syncs bundled knowledge, loads `.env`, configures loguru). Importing `config` alone does **not** run I/O.
+- Web UI: `WEB_HOST`, `WEB_PORT`, `WEB_MAX_UPLOAD_BYTES` (optional; defaults `127.0.0.1`, `8000`, 10 MiB)
 
 ## Architecture
 
@@ -75,12 +79,18 @@ APP_ID=xxx APP_SECRET=yyy monad --feishu
 ```
 monad/
 ├── cognition/          # Reasoning engine
-│   └── reasoner.py     # Multi-turn ReAct loop (max 30 turns)
+│   ├── reasoner.py     # Multi-turn ReAct loop (max 30 turns)
+│   ├── prompts.py      # System prompts for reasoner, planner, completion checker
+│   ├── parser.py       # JSON response parsing with error recovery
+│   ├── hints.py        # Smart hints injected after actions
+│   └── planning.py     # Plan parsing, JSON array extraction, semantic capability matching
 ├── core/
 │   ├── loop.py         # Main orchestration: Input → Reason → Reflect
-│   └── llm.py          # LLM API wrapper
+│   └── llm.py          # LLM API wrapper with retry logic
 ├── execution/
-│   └── executor.py     # Executes capabilities & learned skills
+│   ├── executor.py     # Executes capabilities & learned skills
+│   └── context.py      # TaskState — shared state dict for a single task
+├── types.py            # Shared typing (ToolFn protocol)
 ├── knowledge/
 │   └── vault.py        # File system knowledge I/O
 ├── learning/
@@ -107,7 +117,7 @@ knowledge/
 ├── user/               # User context (facts.md, mood.md, goals.md)
 ├── skills/             # Reusable skills (built-in + auto-generated)
 │   └── <skill_name>/
-│       ├── skill.yaml  # Metadata: name, goal, inputs, steps, triggers, dependencies
+│       ├── skill.yaml  # Metadata: name, goal, inputs, steps, triggers, dependencies, teardown, composition
 │       └── executor.py # Python implementation with run(**kwargs)
 ├── experiences/        # Two-tier experience memory
 │   ├── pending.jsonl            # Short-term staging area
@@ -120,9 +130,18 @@ knowledge/
 
 ## Key Technical Details
 
-### Reasoner (cognition/reasoner.py)
+### Cognition Module (cognition/)
 
-- **Task Decomposition**: Before the ReAct loop, multi-step tasks are decomposed into an explicit ordered plan via LLM. Plan is tracked throughout execution (`✅`/`⬜`), injected into each turn's context, and used for deterministic completion checking. This prevents step-skipping and provides accurate rejection reasons.
+The cognition layer is split into focused modules:
+- **`reasoner.py`** — ReAct loop orchestration, plan tracking, answer validation
+- **`prompts.py`** — System prompts (`build_reasoner_system`, `PLAN_SYSTEM`, `COMPLETION_CHECK_SYSTEM`) with runtime platform injection
+- **`parser.py`** — JSON response parsing (`parse_response`, `clean_llm_output`, `parse_tags`), truncated JSON repair, `[TOOL_CALL]` format handling
+- **`hints.py`** — Post-action contextual hints for shell and desktop_control
+- **`planning.py`** — Plan decomposition parsing (`parse_plan_steps`, `extract_json_array`), semantic capability matching (`action_satisfies_planned_capability`), `BASIC_CAPABILITIES` constant
+
+Key behaviors:
+- **Task Decomposition**: Before the ReAct loop, multi-step tasks are decomposed into an explicit ordered plan via LLM. Plan is tracked throughout execution (`✅`/`⬜`), injected into each turn's context, and used for deterministic completion checking.
+- **Semantic Plan Matching**: `_update_plan` uses `action_satisfies_planned_capability` to handle cases where the LLM uses an equivalent but different capability (e.g. `python_exec` + `requests` for a `web_fetch` step). `_reconcile_plan_from_actions` replays all actions before answer validation.
 - Multi-turn ReAct reasoning with max 30 turns
 - LLM responds with JSON in 3 types:
   - `{"type": "thought", "content": "reasoning"}` - Internal reasoning
@@ -134,18 +153,30 @@ knowledge/
 - Post-action verification: checks skill files exist after creation actions
 - LLM-based task completion check: calls LLM to semantically validate all subtasks are done before accepting an answer (fail-open with max 3 rejections to prevent loops)
 
+### TaskState (execution/context.py)
+
+- Shared `dict` subclass that lives for one `solve()` invocation
+- Every action's **full, untruncated** result is auto-stored via `state.task_state.store(capability, result)` in `_handle_action`
+- Keys follow the pattern `step_{n}_{capability}` (e.g. `step_1_web_fetch`, `step_2_python_exec`)
+- `summary()` produces a compact index for LLM context (keys + char counts only)
+- Injected into `python_exec` as `task_state` variable in exec_globals, and into skill modules as `module.task_state`
+- LLM generates code like `content = task_state["step_1_web_fetch"]` to access full prior results
+- This transforms data flow from prompt-driven (truncated text) to state-driven (direct memory reference)
+
 ### Executor (execution/executor.py)
 
-- Executes 5 basic capabilities
-- Loads skills exclusively from `~/.monad/knowledge/skills/` (via `CONFIG.skills_path`)
+- Executes 5 basic capabilities and learned skills
+- Loads skills exclusively from `~/.monad/knowledge/skills/` (via `CONFIG.skill_dir(name)`)
+- Supports **composite skills**: if `skill.yaml` declares `composition.sequence`, the executor runs sub-skills in order (max 16 depth)
 - Injects MONAD's tool functions (`web_fetch`, `shell`, `python_exec`, `ask_user`) into skill modules at load time
-- `python_exec` pre-injects `os`, `sys`, `web_fetch`, `shell`, `MONAD_OUTPUT_DIR` into execution namespace
+- `python_exec` pre-injects `os`, `sys`, `web_fetch`, `shell`, `MONAD_OUTPUT_DIR`, `task_state` into execution namespace
+- Passes `task_state` through `execute()` → `_try_skill()` → `_load_and_run_skill()` for full propagation
 
 ### Learning Pipeline
 
-1. **Reflection** (`learning/reflection.py`): Summarizes task execution with tags into concise experience
-2. **SkillBuilder** (`learning/skill_builder.py`): Evaluates existing skills first; supports `skip`/`update`/`create` actions
-3. **Vault** (`knowledge/vault.py`): Two-tier experience storage (pending → promote); tag-based retrieval with relevance+recency scoring
+1. **Reflection** (`learning/reflection.py`): Summarizes task execution with tags into concise experience. Uses centralized `clean_llm_output` from `parser.py`.
+2. **SkillBuilder** (`learning/skill_builder.py`): Evaluates existing skills first; supports `skip`/`update`/`create`/composite actions. Receives rich execution traces (`actions_full` / `step_results_full`). Generated code goes through LLM review (`_review_code`) then isolated smoke test (`_smoke_run_skill_code`) before saving.
+3. **Vault** (`knowledge/vault.py`): Two-tier experience storage (pending → promote); tag-based retrieval with relevance+recency scoring. `save_skill` supports optional `composition` dict for composite skills.
 
 ### Stateless Message Management
 
@@ -176,7 +207,7 @@ All knowledge files are markdown. Use `KnowledgeVault` methods:
 - `vault.load_axioms()` - Load system principles
 - `vault.load_skills()` - Load available skills
 - `vault.load_all_context()` - Load everything for reasoning
-- `vault.save_skill(name, goal, inputs, steps, code, dependencies={"python": [...], "system": [...]})` - Save new skill (dependencies auto-installed on execution)
+- `vault.save_skill(name, goal, inputs, steps, code, dependencies={"python": [...], "system": [...]}, composition={"sequence": [...]})` - Save new skill (dependencies auto-installed on execution; composition for YAML-only composite skills)
 - `vault.save_experience(query, reflection, success, tags)` - Save task reflection (stages to pending.jsonl, auto-promotes)
 
 ### LLM Communication
@@ -196,9 +227,10 @@ pytest tests/test_web_fetch.py::TestWebFetchAutoMode::test_auto_simple_page -v
 ```
 
 ### Debugging Reasoner Issues
-- Check `monad/cognition/reasoner.py` system prompt
-- Review JSON parsing in `_parse_response()`
-- Examine turn limit (MAX_TURNS = 30)
+- Check system prompts in `monad/cognition/prompts.py`
+- Review JSON parsing in `monad/cognition/parser.py` (`parse_response`)
+- Check plan parsing in `monad/cognition/planning.py` (`parse_plan_steps`, `action_satisfies_planned_capability`)
+- Examine turn limit (`MAX_TURNS` in `monad/config.py`)
 
 ### Adding Knowledge
 Edit files in `~/.monad/knowledge/` (primary) or bundled `monad/knowledge/` (synced incrementally on startup — new files only, never overwrites user changes):
@@ -222,6 +254,11 @@ Requires optional dependency: `pip install monad-core[feishu]`
 
 ### Install Everything
 `pip install monad-core[all]`
+
+## Design Documents
+
+- **[DESIGN.md](DESIGN.md)** — Complete architecture philosophy, design decisions, trade-offs, and the TaskState design
+- **[FUTURE.md](FUTURE.md)** — Roadmap, architecture evolution history, and deferred design directions
 
 ## Important Notes
 
