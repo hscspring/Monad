@@ -87,8 +87,10 @@ class KnowledgeVault:
                 steps = data.get("steps", [])
                 triggers = data.get("triggers", [])
                 outputs = data.get("outputs", {})
+                composition = data.get("composition")
+                tag = " [composite]" if isinstance(composition, dict) and composition else ""
                 entry = (
-                    f"Skill: {name}\n"
+                    f"Skill: {name}{tag}\n"
                     f"  Goal: {goal}\n"
                     f"  Inputs: {', '.join(inputs)}\n"
                     f"  Steps: {' → '.join(steps)}"

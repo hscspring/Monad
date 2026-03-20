@@ -386,3 +386,20 @@ class TestSkillOutputs:
         )
         skills_text = vault.load_skills()
         assert "Outputs:" not in skills_text
+
+    def test_load_skills_composite_tag(self, vault):
+        vault.save_skill(
+            name="pipe_skill", goal="chain a and b", inputs=["q"],
+            steps=["a then b"],
+            composition={"sequence": ["a", "b"]}
+        )
+        skills_text = vault.load_skills()
+        assert "Skill: pipe_skill [composite]" in skills_text
+
+    def test_load_skills_no_composite_tag_for_normal(self, vault):
+        vault.save_skill(
+            name="normal_skill", goal="normal", inputs=["x"],
+            steps=["do"], code="def run(**kw): pass"
+        )
+        skills_text = vault.load_skills()
+        assert "[composite]" not in skills_text
