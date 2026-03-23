@@ -13,6 +13,7 @@ Usage:
 
 import sys
 
+import monad.config as config_module
 from monad.config import VERSION, init_workspace
 from monad.interface.output import Output
 
@@ -171,7 +172,7 @@ def check_first_run_setup():
     print("=" * 50)
     print("Please configure your LLM provider settings.")
     print("Press Enter to accept the default values shown in brackets.")
-        print(f"Your configuration will be saved to: {CONFIG.root_dir / '.env'}\n")
+    print(f"Your configuration will be saved to: {CONFIG.root_dir / '.env'}\n")
 
     while True:
         result = _prompt_api_config()
@@ -198,13 +199,16 @@ def main():
     check_first_run_setup()
 
     if "--cli" in sys.argv:
+        config_module.LAUNCH_MODE = "cli"
         from monad.core.loop import MonadLoop
         agent = MonadLoop()
         agent.start()
     elif "--feishu" in sys.argv:
+        config_module.LAUNCH_MODE = "feishu"
         from monad.interface.feishu import start_feishu
         start_feishu()
     else:
+        config_module.LAUNCH_MODE = "web"
         from monad.interface.web import start_web
         start_web()
 

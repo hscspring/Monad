@@ -18,7 +18,7 @@ PACKAGE_DIR = Path(__file__).parent
 WORKSPACE_DIR = Path.home() / ".monad"
 
 # ── Version (single source of truth) ────────────────────────────
-VERSION = "0.5.0"
+VERSION = "1.0.0"
 
 # ── Default API Settings ────────────────────────────────────────
 DEFAULT_BASE_URL = "https://api.qnaigc.com/v1"
@@ -59,6 +59,11 @@ PROMOTE_THRESHOLD = 3
 MAX_EXPERIENCES = 10
 RECENT_FALLBACK = 3
 
+# ── Proactive scheduler ─────────────────────────────────────────
+IDLE_THRESHOLD_MINUTES = 30
+PROACTIVE_CHECK_INTERVAL = 60  # seconds
+DAILY_LEARNING_BUDGET = 5
+
 # ── Desktop control ─────────────────────────────────────────────
 MAX_OCR_ELEMENTS = 50
 MIN_OCR_TEXT_LEN = 2
@@ -85,6 +90,9 @@ DEFAULT_USER_AGENT = (
 DIVIDER_WIDTH = 50
 CODE_DIVIDER_WIDTH = 40
 QUIT_COMMANDS = frozenset({"quit", "exit", "bye", "q"})
+
+# ── Launch mode (set by main.py at startup) ───────────────────
+LAUNCH_MODE: str = "cli"
 
 # ── Web server (env overrides) ─────────────────────────────────
 DEFAULT_WEB_HOST = "127.0.0.1"
@@ -128,17 +136,32 @@ def _sync_bundled_knowledge(workspace_root: Path) -> None:
         return
     if not knowledge_dir.exists():
         shutil.copytree(bundled_knowledge, knowledge_dir)
+    else:
+        for src_file in bundled_knowledge.rglob("*"):
+            if not src_file.is_file():
+                continue
+            rel = src_file.relative_to(bundled_knowledge)
+            dest = knowledge_dir / rel
+            top_dir = rel.parts[0] if rel.parts else ""
+            if dest.exists() and top_dir not in _SYSTEM_MANAGED_DIRS:
+                continue
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src_file, dest)
+
+    _sync_bundled_schedules(workspace_root)
+
+
+def _sync_bundled_schedules(workspace_root: Path) -> None:
+    """Copy bundled schedule YAML files to ~/.monad/schedules/ (new files only)."""
+    bundled = PACKAGE_DIR / "knowledge" / "schedules"
+    target = workspace_root / "schedules"
+    if not bundled.exists():
         return
-    for src_file in bundled_knowledge.rglob("*"):
-        if not src_file.is_file():
-            continue
-        rel = src_file.relative_to(bundled_knowledge)
-        dest = knowledge_dir / rel
-        top_dir = rel.parts[0] if rel.parts else ""
-        if dest.exists() and top_dir not in _SYSTEM_MANAGED_DIRS:
-            continue
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(src_file, dest)
+    target.mkdir(parents=True, exist_ok=True)
+    for src in bundled.glob("*.yaml"):
+        dest = target / src.name
+        if not dest.exists():
+            shutil.copy2(src, dest)
 
 
 def _ensure_default_env(workspace_root: Path) -> None:
@@ -184,7 +207,8 @@ def init_workspace(*, configure_logging: bool = True) -> None:
     load_dotenv(ws / ".env")
     _refresh_llm_from_env()
 
-    for _dir in (CONFIG.browser_path, CONFIG.output_path, CONFIG.input_path):
+    for _dir in (CONFIG.browser_path, CONFIG.output_path, CONFIG.input_path,
+                  CONFIG.schedules_path):
         _dir.mkdir(parents=True, exist_ok=True)
 
     if configure_logging:
@@ -252,6 +276,10 @@ class MonadConfig:
     @property
     def cache_path(self) -> Path:
         return self.knowledge_path / "cache"
+
+    @property
+    def schedules_path(self) -> Path:
+        return self.root_dir / "schedules"
 
     @property
     def browser_path(self) -> Path:

@@ -3,6 +3,8 @@ MONAD Core Loop
 The central orchestration: Input → Reasoner.solve() → Reflection
 """
 
+import queue
+
 from loguru import logger
 
 from monad.cognition.reasoner import Reasoner
@@ -14,6 +16,8 @@ from monad.knowledge.vault import KnowledgeVault
 from monad.learning.personalization import Personalizer
 from monad.learning.reflection import Reflection
 from monad.learning.skill_builder import SkillBuilder
+from monad.proactive.notify import notify
+from monad.proactive.scheduler import ProactiveTask, Scheduler
 
 
 class MonadLoop:
@@ -43,6 +47,10 @@ class MonadLoop:
         self.personalizer = Personalizer(vault=self.vault)
         Output.system("  ✓ 个性化学习就绪")
 
+        self.proactive_queue: queue.Queue[ProactiveTask] = queue.Queue(maxsize=8)
+        self.scheduler = Scheduler(self.proactive_queue)
+        Output.system("  ✓ 主动调度器就绪")
+
     def start(self):
         """Start the MONAD interactive loop."""
         Output.banner()
@@ -56,6 +64,7 @@ class MonadLoop:
         else:
             Output.system("尚无已学技能，将在执行任务中自主学习。")
 
+        self.scheduler.start()
         Output.status("Awaiting Objective.\n")
 
         while True:
@@ -63,12 +72,15 @@ class MonadLoop:
                 user_input = self.input.listen()
 
                 if not user_input:
+                    self._process_proactive_if_any()
                     continue
 
                 if user_input.lower() in QUIT_COMMANDS:
+                    self.scheduler.stop()
                     Output.status("MONAD Offline.")
                     break
 
+                self.scheduler.touch()
                 Output.divider()
                 Output.phase("接收到新任务")
                 Output.system(f"用户输入: {user_input}")
@@ -78,6 +90,7 @@ class MonadLoop:
 
             except KeyboardInterrupt:
                 print()
+                self.scheduler.stop()
                 Output.status("MONAD Offline.")
                 break
             except Exception as e:
@@ -85,8 +98,58 @@ class MonadLoop:
                 Output.error(str(e))
                 Output.status("Awaiting Objective.\n")
 
+    def _process_proactive_if_any(self) -> None:
+        """Dequeue and process one proactive task if available."""
+        try:
+            ptask: ProactiveTask = self.proactive_queue.get_nowait()
+        except queue.Empty:
+            return
+
+        self.scheduler.is_processing_proactive = True
+        try:
+            if ptask.task == "__self_improve__":
+                self._run_self_improvement()
+            else:
+                Output.phase("Phase: 主动任务执行")
+                Output.system(f"主动任务: {ptask.task} (来源: {ptask.job_id})")
+                result = self.reasoner.solve(
+                    user_input=ptask.task,
+                    execute_fn=self.executor.execute,
+                )
+                answer = result.get("answer", "（无输出）")
+                notify(f"主动任务完成: {ptask.job_id}", answer, channel=ptask.notify)
+        except Exception as e:
+            logger.exception(f"Proactive task {ptask.job_id} failed")
+            Output.error(f"主动任务执行失败: {e}")
+        finally:
+            self.scheduler.is_processing_proactive = False
+
+    def _run_self_improvement(self) -> None:
+        """Run the self-evaluation + curiosity engine loop."""
+        try:
+            from monad.learning.self_eval import SelfEvaluator
+            from monad.learning.curiosity import CuriosityEngine
+
+            Output.phase("Phase: 自我改进")
+
+            evaluator = SelfEvaluator(vault=self.vault)
+            report = evaluator.evaluate()
+            if report:
+                Output.learning(f"自评估完成: 发现 {len(report.get('weak_areas', []))} 个薄弱环节")
+
+            engine = CuriosityEngine(vault=self.vault, execute_fn=self.executor.execute)
+            improved = engine.run_session(eval_report=report)
+            if improved:
+                notify("自我改进完成", improved, channel="auto")
+            else:
+                Output.system("本次自我改进未产生更新")
+        except Exception as e:
+            logger.exception("Self-improvement cycle failed")
+            Output.error(f"自我改进失败: {e}")
+
     def _process(self, user_input: str):
         """Process a single user request through the full MONAD pipeline."""
+        self.scheduler.touch()
 
         Output.phase("Phase: 推理与执行")
         result = self.reasoner.solve(

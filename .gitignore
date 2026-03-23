@@ -7,6 +7,7 @@ __pycache__/
 
 # C extensions
 *.so
+TESTING.md
 future.md
 DESIGN.md
 design_ori.md

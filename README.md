@@ -25,6 +25,8 @@ Unlike traditional agents that rely on a predefined, hardcoded set of tools, MON
 
 It **autonomously learns** how to complete your tasks by writing and executing Python code on the fly, saving successful experiences as reusable skills, and building a persistent understanding of your preferences and goals.
 
+> **What makes MONAD different?** Other agents evolve their identity (OpenClaw) or stay static between sessions (Cursor, Manus). MONAD evolves its **capabilities** — after 100 tasks, it has 100 new executable Python skills it wrote, tested, and persisted itself. And during idle time, it **self-evaluates** its past failures and autonomously improves its own skills.
+
 ---
 
 ## 🧠 Core Philosophy
@@ -123,6 +125,18 @@ MONAD is **stateless but personalized** — every task starts with a clean conte
 *   **Task Atomicity:** Every objective becomes an independent, reproducible unit of execution. Each task loads the current knowledge state, runs, and writes back what it learned.
 *   **The Future of Agents:** We believe the evolution of Agents will shift from "simulating conversation" to "simulating rational execution." Maintaining a living **"State Whiteboard"** via reflection loops is far more aligned with the essence of AGI than endlessly stacking chat logs.
 
+### 🔄 Self-Learning Loop
+
+MONAD doesn't just learn from tasks the user gives it — it **learns to fix its own weaknesses**:
+
+1. **Self-Evaluation**: The `SelfEvaluator` analyzes past experiences, groups them by category, and identifies patterns of failure (e.g., "PDF generation fails 40% of the time").
+2. **Targeted Research**: The `CuriosityEngine` takes each weakness, researches solutions via `web_fetch`, and generates concrete code improvements.
+3. **Skill/Protocol Updates**: The output is always executable — an updated `executor.py` for a skill or updated protocol markdown. No knowledge hoarding.
+
+This runs automatically during idle time (30 min with no user interaction), with a daily budget of 5 sessions to prevent runaway API costs.
+
+> The principle: **Learn what makes me more capable, not what makes me more knowledgeable.** MONAD has `web_fetch` for real-time facts. What it needs to learn is how to use its own tools better.
+
 ### 🔗 TaskState: The State Monad
 
 In multi-step tasks, data traditionally flows through the LLM's text context — getting truncated and lossy at every step. MONAD solves this with **TaskState**, a shared dict that stores every action's full, untruncated result:
@@ -191,6 +205,14 @@ APP_ID=xxx APP_SECRET=yyy monad --feishu
 ```
 > **Note**: Requires `pip install monad-core[feishu]` for the `lark-oapi` dependency.
 
+### Proactive Mode (Built-in)
+MONAD runs a background scheduler in all modes. It supports:
+- **Scheduled tasks**: `schedule_task("生成今日简报", "daily 08:00")` — MONAD creates these via `python_exec`
+- **Monitoring**: `monitor_condition(code, task, interval_minutes=30)` — triggers when condition is met
+- **Self-improvement**: During idle time (30 min no input), MONAD evaluates its own past failures and researches fixes
+
+Scheduled jobs are stored as human-readable YAML in `~/.monad/schedules/`. Notifications follow the launch mode — web UI gets WebSocket push, Feishu bot gets Feishu messages, CLI gets terminal output.
+
 ### Self-Test
 Verify all modules load correctly and the LLM connection is functioning:
 ```bash
@@ -198,7 +220,6 @@ monad --test
 ```
 
 ### Unit Tests
-Run the full test suite (404 tests):
 ```bash
 python -m pytest tests/ -v
 ```

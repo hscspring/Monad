@@ -102,7 +102,10 @@ def start_feishu():
 
     client = lark.Client.builder().app_id(app_id).app_secret(app_secret).build()
 
+    _last_chat_id = None
+
     def do_p2_im_message_receive_v1(data: P2ImMessageReceiveV1) -> None:
+        nonlocal _last_chat_id
         res_content = ""
         if data.event.message.message_type == "text":
             res_content = json.loads(data.event.message.content)["text"]
@@ -110,6 +113,14 @@ def start_feishu():
             res_content = "解析消息失败，请发送文本消息\nparse message failed, please send text message"
 
         chat_type = data.event.message.chat_type
+
+        if chat_type == "p2p" and data.event.message.chat_id:
+            _last_chat_id = data.event.message.chat_id
+            try:
+                from monad.proactive._feishu_bridge import register_feishu_client
+                register_feishu_client(client, _last_chat_id)
+            except Exception:
+                pass
 
         threading.Thread(
             target=process_monad_async,

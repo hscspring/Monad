@@ -15,6 +15,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Search First Principle**: When stuck (errors, missing packages), MONAD uses `web_fetch` to search for solutions, never guesses. Only asks user when the query itself is unclear.
 - **URL-First Principle**: When the user provides a specific URL, MONAD must access it directly first, not search for it. Search engines are a fallback.
 - **LLM as Command Executor**: LLM training data is disregarded. All factual information must be retrieved from real world via code execution or web perception.
+- **Capability Evolution, Not Identity Evolution**: Unlike OpenClaw (which rewrites its personality files), MONAD only evolves skills and protocols. Axioms are immutable. Learning produces executable code, not text memories.
+- **Self-Improvement Loop**: During idle time, `SelfEvaluator` analyzes past failures by tag, `CuriosityEngine` researches fixes via web_fetch, and applies updates to skills/protocols. Every session must produce a concrete change.
 - **Experience Staging & Hygiene**: New experiences land in `pending.jsonl` first. Only when the same tag pattern recurs ≥3 times is the best example promoted to `accumulated_experiences.md`. Failed experiences are tagged `[FAILED]` and never promoted.
 - **Tag-Based Experience Retrieval**: Experiences scored by `relevance × 2 + recency` (jieba-segmented keyword overlap + timestamp). Top entries selected plus 3 most recent as fallback. No vector DB.
 - **Anti-Hallucination Verification**: Post-action verification checks filesystem after skill creation actions. LLM-based completion check validates all subtasks are done before accepting an answer.
@@ -69,8 +71,10 @@ APP_ID=xxx APP_SECRET=yyy monad --feishu
 - Workspace: `~/.monad/`
 - Config: `~/.monad/.env` (created on first run with interactive setup)
 - LLM settings: `MONAD_BASE_URL`, `MONAD_API_KEY`, `MODEL_ID`
-- Startup: `init_workspace()` in `monad.config` is called from CLI/web/Feishu entry points (creates dirs, syncs bundled knowledge, loads `.env`, configures loguru). Importing `config` alone does **not** run I/O.
+- Startup: `init_workspace()` in `monad.config` is called from CLI/web/Feishu entry points (creates dirs, syncs bundled knowledge + schedules, loads `.env`, configures loguru). Importing `config` alone does **not** run I/O.
 - Web UI: `WEB_HOST`, `WEB_PORT`, `WEB_MAX_UPLOAD_BYTES` (optional; defaults `127.0.0.1`, `8000`, 10 MiB)
+- Scheduler: `IDLE_THRESHOLD_MINUTES` (30), `PROACTIVE_CHECK_INTERVAL` (60s), `DAILY_LEARNING_BUDGET` (5)
+- Launch mode: `LAUNCH_MODE` module variable (`"cli"`, `"web"`, `"feishu"`), set by `main.py`
 
 ## Architecture
 
@@ -85,7 +89,7 @@ monad/
 │   ├── hints.py        # Smart hints injected after actions
 │   └── planning.py     # Plan parsing, JSON array extraction, semantic capability matching
 ├── core/
-│   ├── loop.py         # Main orchestration: Input → Reason → Reflect
+│   ├── loop.py         # Main orchestration: Input → Reason → Reflect → Self-improve
 │   └── llm.py          # LLM API wrapper with retry logic
 ├── execution/
 │   ├── executor.py     # Executes capabilities & learned skills
@@ -97,37 +101,49 @@ monad/
 ├── learning/
 │   ├── reflection.py       # Post-task experience summarization
 │   ├── skill_builder.py    # Auto-generates reusable skills
-│   └── personalization.py  # Post-task user knowledge extraction
-├── tools/              # 5 basic capabilities
+│   ├── personalization.py  # Post-task user knowledge extraction
+│   ├── self_eval.py        # Self-evaluation: failure pattern analysis
+│   └── curiosity.py        # Curiosity engine: targeted skill/protocol improvement
+├── proactive/          # Proactive behavior engine
+│   ├── scheduler.py    # APScheduler-based background job checker
+│   ├── jobs.py         # Job model, YAML persistence, schedule format parser
+│   ├── notify.py       # Multi-channel notification routing
+│   └── _feishu_bridge.py  # Feishu client reference for proactive notifications
+├── tools/              # 5 basic capabilities + helpers
 │   ├── python_exec.py
 │   ├── shell.py
 │   ├── web_fetch.py
 │   ├── ask_user.py
-│   └── desktop_control.py
+│   ├── desktop_control.py
+│   └── _schedule_helpers.py  # schedule_task(), monitor_condition(), etc.
 └── interface/
     ├── web.py          # FastAPI web UI
     ├── feishu.py       # Feishu bot integration
     └── output.py       # Terminal output formatting
 ```
 
-### Knowledge Directory (`~/.monad/knowledge/`)
+### Knowledge Directory (`~/.monad/knowledge/`) and Workspace
 
 ```
-knowledge/
-├── axioms/             # System behavioral principles (rationality.md)
-├── environment/        # World knowledge (internet.md)
-├── user/               # User context (facts.md, mood.md, goals.md)
-├── skills/             # Reusable skills (built-in + auto-generated)
-│   └── <skill_name>/
-│       ├── skill.yaml  # Metadata: name, goal, inputs, outputs, steps, triggers, dependencies, teardown, composition
-│       └── executor.py # Python implementation with run(**kwargs)
-├── experiences/        # Two-tier experience memory
-│   ├── pending.jsonl            # Short-term staging area
-│   └── accumulated_experiences.md  # Long-term promoted experiences
-├── protocols/          # Error handling protocols
-├── tools/              # Documentation for 5 basic capabilities
-├── records/            # Full execution logs per task
-└── cache/              # Temporary task results
+~/.monad/
+├── knowledge/
+│   ├── axioms/             # System behavioral principles (rationality.md) — IMMUTABLE
+│   ├── environment/        # World knowledge (internet.md)
+│   ├── user/               # User context (facts.md, mood.md, goals.md)
+│   ├── skills/             # Reusable skills (built-in + auto-generated)
+│   │   └── <skill_name>/
+│   │       ├── skill.yaml  # Metadata: name, goal, inputs, outputs, steps, triggers, dependencies, teardown, composition
+│   │       └── executor.py # Python implementation with run(**kwargs)
+│   ├── experiences/        # Two-tier experience memory
+│   │   ├── pending.jsonl            # Short-term staging area
+│   │   └── accumulated_experiences.md  # Long-term promoted experiences
+│   ├── protocols/          # Error handling protocols
+│   ├── tools/              # Documentation for 5 basic capabilities + schedule helpers
+│   ├── records/            # Full execution logs per task + self-eval reports
+│   └── cache/              # Temporary task results + curiosity_state.json
+├── schedules/              # Proactive job definitions (YAML, one per job)
+│   └── self_improvement.yaml  # Default idle-triggered self-improvement job
+└── .env                    # LLM API configuration
 ```
 
 ## Key Technical Details
@@ -173,7 +189,7 @@ Key behaviors:
   - `composition.sequence` — simple list of sub-skill names, all receive the same kwargs
   - `composition.steps` — ordered sub-skills with **parameter mapping**: `{{kwargs.X}}` references caller input, `{{skill_name}}` references a previous step's return value. Resolved by `_resolve_templates`.
 - Injects MONAD's tool functions (`web_fetch`, `shell`, `python_exec`, `ask_user`) into skill modules at load time
-- `python_exec` pre-injects `os`, `sys`, `web_fetch`, `shell`, `MONAD_OUTPUT_DIR`, `task_state` into execution namespace
+- `python_exec` pre-injects `os`, `sys`, `web_fetch`, `shell`, `MONAD_OUTPUT_DIR`, `task_state`, `schedule_task`, `monitor_condition`, `list_schedules`, `cancel_schedule` into execution namespace
 - Passes `task_state` through `execute()` → `_try_skill()` → `_load_and_run_skill()` for full propagation
 
 ### Learning Pipeline
@@ -184,6 +200,25 @@ Three parallel learners run after every successful task:
 2. **SkillBuilder** (`learning/skill_builder.py`): Evaluates existing skills first; supports `skip`/`update`/`create`/composite actions. Receives rich execution traces (`actions_full` / `step_results_full`). Generated code goes through LLM review (`_review_code`) then isolated smoke test (`_smoke_run_skill_code`) before saving.
 3. **Personalizer** (`learning/personalization.py`): Extracts user facts, preferences, and goals from the interaction and writes them to `user/` knowledge files. Same principle as Reflection and SkillBuilder — execute, extract, persist.
 4. **Vault** (`knowledge/vault.py`): Two-tier experience storage (pending → promote); tag-based retrieval with relevance+recency scoring. `save_skill` supports optional `composition` dict for composite skills. User context write API: `update_user_facts`, `update_user_goals`, `update_user_mood`.
+
+### Self-Learning Pipeline (Idle-time)
+
+Two additional learners run during idle time (triggered by scheduler):
+
+5. **SelfEvaluator** (`learning/self_eval.py`): Reads all `pending.jsonl` entries, groups by tags, calculates per-category success/failure rates. LLM identifies weak areas and generates improvement objectives. Saves reports to `records/self_eval_<date>.md`.
+6. **CuriosityEngine** (`learning/curiosity.py`): Takes improvement objectives from SelfEvaluator, researches via `web_fetch`, generates concrete skill/protocol updates via LLM, writes changes to filesystem. Budget: 5 sessions/day, 2 objectives/session. State persisted in `cache/curiosity_state.json`.
+
+### Proactive Scheduler
+
+- **APScheduler** `BackgroundScheduler` runs in daemon thread, checks jobs every 60 seconds
+- Jobs stored as YAML in `~/.monad/schedules/`, loaded by `proactive/jobs.py`
+- Three job types: `cron` (time-based), `monitor` (condition check), `idle` (idle-triggered)
+- Simple schedule format: `daily HH:MM`, `hourly`, `every Nm`/`Nh`, `weekly MON HH:MM`
+- Proactive tasks go into `MonadLoop.proactive_queue`, processed when user is idle
+- Notification follows launch mode: web→WebSocket, feishu→Feishu msg, cli→terminal
+- `python_exec` injects `schedule_task()`, `monitor_condition()`, `list_schedules()`, `cancel_schedule()`
+- Config constants: `IDLE_THRESHOLD_MINUTES=30`, `PROACTIVE_CHECK_INTERVAL=60`, `DAILY_LEARNING_BUDGET=5`
+- `LAUNCH_MODE` module-level variable in `config.py`, set by `main.py` at startup
 
 ### Stateless Message Management
 
@@ -277,6 +312,6 @@ Requires optional dependency: `pip install monad-core[feishu]`
 - **Chrome browser** required for web_fetch browser mode (uses system Chrome, no separate install needed)
 - **OpenAI-compatible API** required (configured via `~/.monad/.env`)
 - User workspace at `~/.monad/` is separate from package code at `monad/`
-- **Knowledge sync**: On startup, `skills/`, `protocols/`, `tools/` are always overwritten from the bundled package (system-managed). `user/`, `experiences/`, `axioms/`, `environment/` only get new files (user-managed, never overwritten).
+- **Knowledge sync**: On startup, `skills/`, `protocols/`, `tools/` are always overwritten from the bundled package (system-managed). `user/`, `experiences/`, `axioms/`, `environment/` only get new files (user-managed, never overwritten). Bundled `schedules/` are also synced (new files only, never overwrite user schedules).
 - First run triggers interactive setup if API key missing
 - All output uses Chinese + English (bilingual system messages)

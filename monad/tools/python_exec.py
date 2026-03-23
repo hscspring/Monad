@@ -58,6 +58,17 @@ def run(code: str = "", _task_state=None, **kwargs) -> str:
             exec_globals["shell"] = _sh
         except ImportError:
             pass
+        try:
+            from monad.tools._schedule_helpers import (
+                schedule_task, monitor_condition,
+                list_schedules, cancel_schedule,
+            )
+            exec_globals["schedule_task"] = schedule_task
+            exec_globals["monitor_condition"] = monitor_condition
+            exec_globals["list_schedules"] = list_schedules
+            exec_globals["cancel_schedule"] = cancel_schedule
+        except ImportError:
+            pass
         exec(code, exec_globals)
 
         stdout_val = captured_out.getvalue()

@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "monad-core"
-version = "0.5.1"
+version = "1.0.0"
 description = "Personal AGI Operating Core"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [
-  { name = "Yam", email = "hscspring@gmail.com" }
+  { name = "Yam", email = "haoshaochun@gmail.com" }
 ]
 classifiers = [
     "Programming Language :: Python :: 3",
@@ -29,7 +29,8 @@ dependencies = [
     "uvicorn>=0.23.0",
     "python-multipart>=0.0.6",
     "websockets>=11.0.3",
-    "jieba>=0.42"
+    "jieba>=0.42",
+    "apscheduler>=3.10.0,<4.0"
 ]
 
 [project.optional-dependencies]
@@ -53,11 +54,11 @@ all = [
 monad = "monad.main:main"
 
 [tool.setuptools]
-packages = ["monad", "monad.cognition", "monad.core", "monad.execution", "monad.interface", "monad.knowledge", "monad.learning", "monad.tools"]
+packages = ["monad", "monad.cognition", "monad.core", "monad.execution", "monad.interface", "monad.knowledge", "monad.learning", "monad.proactive", "monad.tools"]
 
 [tool.setuptools.package-data]
 "monad.interface" = ["static/*"]
-"monad" = ["knowledge/**/*", "knowledge/*"]
+"monad" = ["knowledge/**/*", "knowledge/*", "knowledge/schedules/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
